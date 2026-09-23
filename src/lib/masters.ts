@@ -2,7 +2,8 @@
 export type FieldDef = {
   name: string;
   label: string;
-  type?: "text" | "textarea" | "email" | "number";
+  /** "supplier" renders a dropdown of suppliers and stores the supplier id. */
+  type?: "text" | "textarea" | "email" | "number" | "supplier";
   required?: boolean;
   placeholder?: string;
   wide?: boolean;
@@ -61,6 +62,7 @@ export const MASTERS: Record<
       { name: "category", label: "Category", placeholder: "e.g. Panels" },
       { name: "unit", label: "Unit", required: true, placeholder: "pcs, set, m, roll" },
       { name: "defaultCost", label: "Default unit cost (₱)", type: "number" },
+      { name: "defaultSupplierId", label: "Default supplier", type: "supplier" },
     ],
     columns: [
       { name: "name", label: "Material" },
@@ -68,6 +70,7 @@ export const MASTERS: Record<
       { name: "category", label: "Category" },
       { name: "unit", label: "Unit" },
       { name: "defaultCost", label: "Default cost", money: true },
+      { name: "defaultSupplierName", label: "Default supplier" },
     ],
   },
 };

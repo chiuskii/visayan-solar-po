@@ -51,6 +51,7 @@ export type Material = {
   category: string | null;
   unit: string;
   defaultCost: number;
+  defaultSupplierId: number | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -59,7 +60,6 @@ export type PurchaseOrder = {
   id: number;
   poNumber: string;
   clientId: number;
-  supplierId: number;
   poDate: string;
   expectedDate: string | null;
   status: PoStatus;
@@ -76,6 +76,7 @@ export type PurchaseOrder = {
 export type PoItem = {
   id: number;
   poId: number;
+  supplierId: number;
   materialId: number | null;
   description: string;
   spec: string | null;
@@ -116,13 +117,13 @@ export const COLUMNS = {
   users: { id: "id", name: "name", email: "email", passwordHash: "password_hash", role: "role", active: "active", createdAt: "created_at", updatedAt: "updated_at" },
   clients: { id: "id", name: "name", contactPerson: "contact_person", phone: "phone", email: "email", address: "address", notes: "notes", createdAt: "created_at", updatedAt: "updated_at" },
   suppliers: { id: "id", name: "name", contactPerson: "contact_person", phone: "phone", email: "email", address: "address", tin: "tin", paymentTerms: "payment_terms", notes: "notes", createdAt: "created_at", updatedAt: "updated_at" },
-  materials: { id: "id", name: "name", spec: "spec", category: "category", unit: "unit", defaultCost: "default_cost", createdAt: "created_at", updatedAt: "updated_at" },
+  materials: { id: "id", name: "name", spec: "spec", category: "category", unit: "unit", defaultCost: "default_cost", defaultSupplierId: "default_supplier_id", createdAt: "created_at", updatedAt: "updated_at" },
   purchase_orders: {
-    id: "id", poNumber: "po_number", clientId: "client_id", supplierId: "supplier_id", poDate: "po_date", expectedDate: "expected_date",
+    id: "id", poNumber: "po_number", clientId: "client_id", poDate: "po_date", expectedDate: "expected_date",
     status: "status", deliveryAddress: "delivery_address", terms: "terms", vatRate: "vat_rate", discount: "discount", notes: "notes",
     createdById: "created_by_id", createdAt: "created_at", updatedAt: "updated_at",
   },
-  po_items: { id: "id", poId: "po_id", materialId: "material_id", description: "description", spec: "spec", unit: "unit", quantity: "quantity", unitCost: "unit_cost", sortOrder: "sort_order" },
+  po_items: { id: "id", poId: "po_id", supplierId: "supplier_id", materialId: "material_id", description: "description", spec: "spec", unit: "unit", quantity: "quantity", unitCost: "unit_cost", sortOrder: "sort_order" },
   deliveries: { id: "id", poId: "po_id", deliveryDate: "delivery_date", drNumber: "dr_number", receivedBy: "received_by", notes: "notes", createdById: "created_by_id", createdAt: "created_at" },
   company_settings: {
     id: "id", companyName: "company_name", address: "address", phone: "phone", email: "email", tin: "tin", poPrefix: "po_prefix",

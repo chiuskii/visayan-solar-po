@@ -29,13 +29,14 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     status: PoStatus;
     expectedDate: string | null;
     clientName: string;
-    supplierName: string;
+    supplierName: string | null;
   }>(
     `SELECT po.id, po.po_number AS poNumber, po.status, po.expected_date AS expectedDate,
-            c.name AS clientName, s.name AS supplierName
+            c.name AS clientName,
+            (SELECT GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ', ')
+             FROM po_items x JOIN suppliers s ON s.id = x.supplier_id WHERE x.po_id = po.id) AS supplierName
      FROM purchase_orders po
      JOIN clients c ON c.id = po.client_id
-     JOIN suppliers s ON s.id = po.supplier_id
      WHERE po.status IN ('DRAFT', 'ORDERED', 'PARTIAL')
      ORDER BY po.expected_date IS NULL, po.expected_date, po.id DESC
      LIMIT 15`,

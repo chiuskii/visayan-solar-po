@@ -4,7 +4,7 @@ import { useFormAction } from "./client-ui";
 import type { FormState } from "@/app/actions/pos";
 import { num } from "@/lib/format";
 
-type Item = { id: number; description: string; spec: string | null; unit: string; quantity: number; received: number; balance: number };
+type Item = { id: number; supplierName: string; description: string; spec: string | null; unit: string; quantity: number; received: number; balance: number };
 
 export function DeliveryForm({
   action,
@@ -41,7 +41,10 @@ export function DeliveryForm({
           <tbody>
             {open.map((i) => (
               <tr key={i.id}>
-                <td>{i.description}{i.spec ? <span className="text-slate-500"> · {i.spec}</span> : null}</td>
+                <td>
+                  {i.description}{i.spec ? <span className="text-slate-500"> · {i.spec}</span> : null}
+                  <div className="text-xs text-slate-500">{i.supplierName}</div>
+                </td>
                 <td className="num">{num(i.quantity)} {i.unit}</td>
                 <td className="num font-medium text-amber-700">{num(i.balance)}</td>
                 <td>

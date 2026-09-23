@@ -9,10 +9,12 @@ export function MasterForm({
   entity,
   id,
   initial,
+  suppliers = [],
 }: {
   entity: MasterKey;
   id: number | null;
   initial?: Record<string, unknown>;
+  suppliers?: { id: number; name: string }[];
 }) {
   const cfg = MASTERS[entity];
   const [state, onSubmit, pending] = useFormAction<FormState>(saveMaster.bind(null, entity, id), {});
@@ -37,6 +39,13 @@ export function MasterForm({
               </label>
               {f.type === "textarea" ? (
                 <textarea {...common} rows={3} />
+              ) : f.type === "supplier" ? (
+                <select {...common}>
+                  <option value="">— None —</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
               ) : (
                 <input {...common} type={f.type ?? "text"} step={f.type === "number" ? "0.01" : undefined} min={f.type === "number" ? 0 : undefined} />
               )}

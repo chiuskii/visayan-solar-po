@@ -20,6 +20,7 @@ const optText = (max: number) =>
 
 const itemSchema = z.object({
   id: z.number().int().positive().optional(),
+  supplierId: z.number({ error: "Choose a supplier for each line." }).int().positive("Choose a supplier for each line."),
   materialId: z.number().int().positive().nullable().optional(),
   description: z.string().trim().min(1, "Each line needs a material/description.").max(255),
   spec: z.string().trim().max(190).optional().default(""),
@@ -30,7 +31,6 @@ const itemSchema = z.object({
 
 const poSchema = z.object({
   clientId: z.coerce.number().int().positive("Choose a client."),
-  supplierId: z.coerce.number().int().positive("Choose a supplier."),
   poDate: dateStr,
   expectedDate: z.union([dateStr, z.literal("")]).transform((v) => v || null),
   deliveryAddress: optText(2000),
@@ -50,7 +50,6 @@ function parsePoForm(formData: FormData) {
   }
   const parsed = poSchema.safeParse({
     clientId: formData.get("clientId"),
-    supplierId: formData.get("supplierId"),
     poDate: formData.get("poDate") ?? "",
     expectedDate: formData.get("expectedDate") ?? "",
     deliveryAddress: formData.get("deliveryAddress") ?? "",
@@ -78,11 +77,20 @@ function parsePoForm(formData: FormData) {
   } as const;
 }
 
+/** Error message if any line points at a supplier that no longer exists. */
+async function checkSuppliers(items: { supplierId: number }[]) {
+  const ids = [...new Set(items.map((i) => i.supplierId))];
+  const found = await query<{ id: number }>("SELECT id FROM suppliers WHERE id IN (?)", [ids]);
+  return found.length === ids.length ? null : "One of the chosen suppliers no longer exists. Pick another.";
+}
+
 export async function createPo(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
   const parsed = parsePoForm(formData);
   if ("error" in parsed) return { error: parsed.error };
   const { items, ...header } = parsed.data;
+  const supplierError = await checkSuppliers(items);
+  if (supplierError) return { error: supplierError };
   const status = formData.get("intent") === "order" ? "ORDERED" : "DRAFT";
 
   let newId = 0;
@@ -115,6 +123,8 @@ export async function updatePo(poId: number, _prev: FormState, formData: FormDat
   const parsed = parsePoForm(formData);
   if ("error" in parsed) return { error: parsed.error };
   const { items, ...header } = parsed.data;
+  const supplierError = await checkSuppliers(items);
+  if (supplierError) return { error: supplierError };
 
   const po = await queryOne<{ status: PoStatus }>("SELECT status FROM purchase_orders WHERE id = ?", [poId]);
   if (!po) return { error: "This PO no longer exists." };

@@ -15,6 +15,30 @@ export function computeTotals(
   return { subtotal, discount: round2(discount), net, vat, total: round2(net + vat) };
 }
 
+/**
+ * Lines grouped by supplier (in order of first appearance), each with its own totals.
+ * The PO discount is shared across suppliers in proportion to their subtotals, so the
+ * groups add up to the PO total.
+ */
+export function totalsBySupplier<T extends { supplierId: number; quantity: number; unitCost: number }>(
+  items: T[],
+  discount: number,
+  vatRate: number,
+) {
+  const groups = new Map<number, T[]>();
+  for (const i of items) groups.set(i.supplierId, [...(groups.get(i.supplierId) ?? []), i]);
+  const subtotal = computeTotals(items, 0, 0).subtotal;
+  let discountLeft = round2(Math.min(discount, subtotal));
+  const entries = [...groups.entries()];
+  return entries.map(([supplierId, lines], n) => {
+    const sub = computeTotals(lines, 0, 0).subtotal;
+    const share = n === entries.length - 1 ? discountLeft : round2(subtotal ? (discount * sub) / subtotal : 0);
+    const d = Math.min(share, discountLeft, sub);
+    discountLeft = round2(discountLeft - d);
+    return { supplierId, items: lines, totals: computeTotals(lines, d, vatRate) };
+  });
+}
+
 export async function getSettings(): Promise<CompanySettings> {
   const row = await queryOne<CompanySettings>(`SELECT ${cols("company_settings")} FROM company_settings WHERE id = 1`);
   return (

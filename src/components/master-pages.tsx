@@ -18,7 +18,12 @@ export async function MasterListPage({ entity, q }: { entity: MasterKey; q?: str
   const table = TABLES[entity];
   const search = (q ?? "").trim();
   const rows = await query<Record<string, unknown>>(
-    `SELECT ${cols(table)} FROM ${table} ${search ? "WHERE name LIKE ?" : ""} ORDER BY name LIMIT 500`,
+    `SELECT ${cols(table, "t")}${entity === "materials" ? ", s.name AS defaultSupplierName" : ""}
+     FROM ${table} t
+     ${entity === "materials" ? "LEFT JOIN suppliers s ON s.id = t.default_supplier_id" : ""}
+     ${search ? "WHERE t.name LIKE ?" : ""}
+     ORDER BY t.name
+     LIMIT 500`,
     search ? [`%${search}%`] : [],
   );
 
@@ -73,13 +78,20 @@ export async function MasterListPage({ entity, q }: { entity: MasterKey; q?: str
   );
 }
 
+/** Supplier choices, only loaded for lists that have a supplier field. */
+async function supplierOptions(entity: MasterKey) {
+  if (!MASTERS[entity].fields.some((f) => f.type === "supplier")) return [];
+  return query<{ id: number; name: string }>("SELECT id, name FROM suppliers ORDER BY name");
+}
+
 export async function MasterNewPage({ entity }: { entity: MasterKey }) {
   await requireUser();
   const cfg = MASTERS[entity];
+  const suppliers = await supplierOptions(entity);
   return (
     <>
       <PageHeader title={`New ${cfg.singular.toLowerCase()}`} back={{ href: `/${entity}`, label: cfg.title }} />
-      <MasterForm entity={entity} id={null} />
+      <MasterForm entity={entity} id={null} suppliers={suppliers} />
     </>
   );
 }
@@ -90,7 +102,10 @@ export async function MasterEditPage({ entity, id, error }: { entity: MasterKey;
   const table = TABLES[entity];
   const numId = Number(id);
   if (!Number.isInteger(numId)) notFound();
-  const row = await queryOne<Record<string, unknown>>(`SELECT ${cols(table)} FROM ${table} WHERE id = ?`, [numId]);
+  const [row, suppliers] = await Promise.all([
+    queryOne<Record<string, unknown>>(`SELECT ${cols(table)} FROM ${table} WHERE id = ?`, [numId]),
+    supplierOptions(entity),
+  ]);
   if (!row) notFound();
   return (
     <>
@@ -105,7 +120,7 @@ export async function MasterEditPage({ entity, id, error }: { entity: MasterKey;
           This {cfg.singular.toLowerCase()} is used on purchase orders, so it can’t be deleted.
         </p>
       )}
-      <MasterForm entity={entity} id={numId} initial={row} />
+      <MasterForm entity={entity} id={numId} initial={row} suppliers={suppliers} />
     </>
   );
 }

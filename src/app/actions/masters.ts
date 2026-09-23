@@ -16,7 +16,11 @@ function readFields(entity: MasterKey, formData: FormData) {
   for (const f of MASTERS[entity].fields) {
     const raw = String(formData.get(f.name) ?? "").trim();
     if (f.required && !raw) throw new Error(`${f.label} is required.`);
-    if (f.type === "number") {
+    if (f.type === "supplier") {
+      const n = raw === "" ? null : Number(raw);
+      if (n !== null && !Number.isInteger(n)) throw new Error(`Choose a valid ${f.label.toLowerCase()}.`);
+      values[f.name] = n;
+    } else if (f.type === "number") {
       const n = raw === "" ? 0 : Number(raw);
       if (!Number.isFinite(n) || n < 0) throw new Error(`${f.label} must be a positive number.`);
       values[f.name] = n;
@@ -38,6 +42,12 @@ export async function saveMaster(entity: MasterKey, id: number | null, _prev: Fo
     return { error: (e as Error).message };
   }
   const table = TABLES[entity];
+  for (const f of MASTERS[entity].fields) {
+    const sid = values[f.name];
+    if (f.type === "supplier" && sid !== null && !(await queryOne("SELECT id FROM suppliers WHERE id = ?", [sid]))) {
+      return { error: `That ${f.label.toLowerCase()} no longer exists.` };
+    }
+  }
   if (id) {
     await execute(`UPDATE ${table} SET ? WHERE id = ?`, [toRow(table, values), id]);
   } else {
@@ -52,8 +62,11 @@ export async function deleteMaster(entity: MasterKey, id: number, _formData: For
   const table = TABLES[entity];
   if (!table) return;
   if (entity === "clients" || entity === "suppliers") {
-    const col = entity === "clients" ? "client_id" : "supplier_id";
-    const row = await queryOne<{ n: number }>(`SELECT COUNT(*) AS n FROM purchase_orders WHERE ${col} = ?`, [id]);
+    const sql =
+      entity === "clients"
+        ? "SELECT COUNT(*) AS n FROM purchase_orders WHERE client_id = ?"
+        : "SELECT COUNT(*) AS n FROM po_items WHERE supplier_id = ?";
+    const row = await queryOne<{ n: number }>(sql, [id]);
     if (Number(row?.n) > 0) redirect(`/${entity}/${id}?error=in-use`);
   }
   await execute(`DELETE FROM ${table} WHERE id = ?`, [id]);
@@ -66,8 +79,8 @@ export async function listForPicker() {
   const [c, s, m] = await Promise.all([
     query<Pick<Client, "id" | "name" | "address">>("SELECT id, name, address FROM clients ORDER BY name"),
     query<Pick<Supplier, "id" | "name" | "paymentTerms">>("SELECT id, name, payment_terms AS paymentTerms FROM suppliers ORDER BY name"),
-    query<Pick<Material, "id" | "name" | "spec" | "unit" | "defaultCost">>(
-      "SELECT id, name, spec, unit, default_cost AS defaultCost FROM materials ORDER BY name, spec",
+    query<Pick<Material, "id" | "name" | "spec" | "unit" | "defaultCost" | "defaultSupplierId">>(
+      "SELECT id, name, spec, unit, default_cost AS defaultCost, default_supplier_id AS defaultSupplierId FROM materials ORDER BY name, spec",
     ),
   ]);
   return { clients: c, suppliers: s, materials: m };

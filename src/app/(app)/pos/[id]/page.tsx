@@ -25,7 +25,8 @@ export default async function PoDetailPage({
   if (!Number.isInteger(id)) notFound();
   const detail = await getPoDetail(id);
   if (!detail) notFound();
-  const { po, client, supplier, items, totals } = detail;
+  const { po, client, items, totals, bySupplier } = detail;
+  const multiSupplier = bySupplier.length > 1;
   const canReceive = po.status === "ORDERED" || po.status === "PARTIAL";
   const totalBalance = items.reduce((s, i) => s + i.balance, 0);
 
@@ -38,7 +39,7 @@ export default async function PoDetailPage({
             {po.poNumber} <StatusBadge status={po.status} />
           </span>
         }
-        subtitle={`${client.name} · from ${supplier.name}`}
+        subtitle={`${client.name} · from ${bySupplier.map((g) => g.supplier.name).join(", ") || "—"}`}
         actions={
           <>
             <a href={`/pos/${id}/print`} target="_blank" className="btn">Print / PDF</a>
@@ -73,10 +74,21 @@ export default async function PoDetailPage({
           {po.deliveryAddress && <div className="mt-2 whitespace-pre-line text-slate-600"><span className="label mb-0 inline">Deliver to: </span>{po.deliveryAddress}</div>}
         </div>
         <div className="card p-4 text-sm">
-          <div className="label">Supplier</div>
-          <Link href={`/suppliers/${supplier.id}`} className="font-medium text-brand-700 hover:underline">{supplier.name}</Link>
-          {supplier.contactPerson && <div className="text-slate-600">{supplier.contactPerson}</div>}
-          {supplier.phone && <div className="text-slate-600">{supplier.phone}</div>}
+          <div className="label">{multiSupplier ? `Suppliers (${bySupplier.length})` : "Supplier"}</div>
+          <ul className="space-y-2">
+            {bySupplier.map(({ supplier, items: lines, totals: t }) => (
+              <li key={supplier.id}>
+                <div className="flex justify-between gap-2">
+                  <Link href={`/suppliers/${supplier.id}`} className="font-medium text-brand-700 hover:underline">{supplier.name}</Link>
+                  {multiSupplier && <span className="tabular-nums text-slate-600">{peso(t.total)}</span>}
+                </div>
+                <div className="text-slate-600">
+                  {[supplier.contactPerson, supplier.phone].filter(Boolean).join(" · ")}
+                  {multiSupplier && <span className="text-slate-400">{supplier.contactPerson || supplier.phone ? " · " : ""}{lines.length} {lines.length === 1 ? "line" : "lines"}</span>}
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
         <div className="card grid grid-cols-2 gap-2 p-4 text-sm">
           <div><div className="label">PO date</div>{fmtDate(po.poDate)}</div>
@@ -88,16 +100,17 @@ export default async function PoDetailPage({
 
       <section className="card mb-6 overflow-x-auto">
         <div className="border-b border-slate-200 px-4 py-3"><h2>Materials</h2></div>
-        <table className="table min-w-[820px]">
+        <table className="table min-w-[960px]">
           <thead>
             <tr>
-              <th>Material</th><th>Spec</th><th>Unit</th><th className="num">Qty</th><th className="num">Unit cost</th><th className="num">Amount</th><th className="num">Received</th><th className="num">Balance</th>
+              <th>Material</th><th>Supplier</th><th>Spec</th><th>Unit</th><th className="num">Qty</th><th className="num">Unit cost</th><th className="num">Amount</th><th className="num">Received</th><th className="num">Balance</th>
             </tr>
           </thead>
           <tbody>
             {items.map((i) => (
               <tr key={i.id}>
                 <td className="font-medium">{i.description}</td>
+                <td>{i.supplierName}</td>
                 <td>{i.spec || "—"}</td>
                 <td>{i.unit}</td>
                 <td className="num">{num(i.quantity)}</td>
@@ -109,10 +122,10 @@ export default async function PoDetailPage({
             ))}
           </tbody>
           <tfoot className="text-sm">
-            <tr><td colSpan={5} className="num text-slate-500">Subtotal</td><td className="num">{peso(totals.subtotal)}</td><td colSpan={2}></td></tr>
-            {totals.discount > 0 && <tr><td colSpan={5} className="num text-slate-500">Discount</td><td className="num">−{peso(totals.discount)}</td><td colSpan={2}></td></tr>}
-            {totals.vat > 0 && <tr><td colSpan={5} className="num text-slate-500">VAT ({po.vatRate}%)</td><td className="num">{peso(totals.vat)}</td><td colSpan={2}></td></tr>}
-            <tr><td colSpan={5} className="num font-semibold">Total</td><td className="num font-semibold">{peso(totals.total)}</td><td colSpan={2}></td></tr>
+            <tr><td colSpan={6} className="num text-slate-500">Subtotal</td><td className="num">{peso(totals.subtotal)}</td><td colSpan={2}></td></tr>
+            {totals.discount > 0 && <tr><td colSpan={6} className="num text-slate-500">Discount</td><td className="num">−{peso(totals.discount)}</td><td colSpan={2}></td></tr>}
+            {totals.vat > 0 && <tr><td colSpan={6} className="num text-slate-500">VAT ({po.vatRate}%)</td><td className="num">{peso(totals.vat)}</td><td colSpan={2}></td></tr>}
+            <tr><td colSpan={6} className="num font-semibold">Total</td><td className="num font-semibold">{peso(totals.total)}</td><td colSpan={2}></td></tr>
           </tfoot>
         </table>
       </section>

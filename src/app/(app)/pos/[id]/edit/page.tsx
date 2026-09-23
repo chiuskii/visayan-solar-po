@@ -26,7 +26,6 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
         materials={opts.materials}
         initial={{
           clientId: po.clientId,
-          supplierId: po.supplierId,
           poDate: po.poDate,
           expectedDate: po.expectedDate ?? "",
           deliveryAddress: po.deliveryAddress ?? "",
@@ -37,6 +36,7 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
           items: detail.items.map((i) => ({
             key: `e${i.id}`,
             id: i.id,
+            supplierId: i.supplierId,
             materialId: i.materialId,
             description: i.description,
             spec: i.spec ?? "",

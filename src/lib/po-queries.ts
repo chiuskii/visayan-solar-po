@@ -1,7 +1,7 @@
 import "server-only";
 import { query, queryOne } from "@/db";
 import { cols, type Client, type Delivery, type PoItem, type PurchaseOrder, type Supplier } from "@/db/types";
-import { computeTotals, receivedByItem, round2 } from "./po";
+import { computeTotals, receivedByItem, round2, totalsBySupplier } from "./po";
 
 export async function getPoDetail(id: number) {
   const po = await queryOne<PurchaseOrder & { createdByName: string | null }>(
@@ -13,18 +13,31 @@ export async function getPoDetail(id: number) {
   );
   if (!po) return null;
   const { createdByName, ...poRow } = po;
-  const [client, supplier] = await Promise.all([
-    queryOne<Client>(`SELECT ${cols("clients")} FROM clients WHERE id = ?`, [po.clientId]),
-    queryOne<Supplier>(`SELECT ${cols("suppliers")} FROM suppliers WHERE id = ?`, [po.supplierId]),
-  ]);
-  if (!client || !supplier) return null;
+  const client = await queryOne<Client>(`SELECT ${cols("clients")} FROM clients WHERE id = ?`, [po.clientId]);
+  if (!client) return null;
 
-  const items = await query<PoItem>(`SELECT ${cols("po_items")} FROM po_items WHERE po_id = ? ORDER BY sort_order, id`, [id]);
+  const items = await query<PoItem & { supplierName: string }>(
+    `SELECT ${cols("po_items", "pi")}, s.name AS supplierName
+     FROM po_items pi
+     JOIN suppliers s ON s.id = pi.supplier_id
+     WHERE pi.po_id = ?
+     ORDER BY pi.sort_order, pi.id`,
+    [id],
+  );
   const received = await receivedByItem(items.map((i) => i.id));
   const itemsWithBalance = items.map((i) => {
     const rec = received.get(i.id) ?? 0;
     return { ...i, amount: round2(i.quantity * i.unitCost), received: rec, balance: round2(Math.max(0, i.quantity - rec)) };
   });
+
+  const supplierIds = [...new Set(items.map((i) => i.supplierId))];
+  const supplierRows = supplierIds.length
+    ? await query<Supplier>(`SELECT ${cols("suppliers")} FROM suppliers WHERE id IN (?)`, [supplierIds])
+    : [];
+  const bySupplier = totalsBySupplier(itemsWithBalance, poRow.discount, poRow.vatRate).map((g) => ({
+    ...g,
+    supplier: supplierRows.find((s) => s.id === g.supplierId)!,
+  }));
 
   const dels = await query<Delivery & { byName: string | null }>(
     `SELECT ${cols("deliveries", "d")}, u.name AS byName
@@ -47,10 +60,11 @@ export async function getPoDetail(id: number) {
   return {
     po: poRow,
     client,
-    supplier,
     createdByName,
     items: itemsWithBalance,
     totals: computeTotals(items, poRow.discount, poRow.vatRate),
+    /** One entry per supplier on this PO, with that supplier's lines and share of the totals. */
+    bySupplier,
     deliveries: dels.map((d) => ({ ...d, items: dItems.filter((x) => x.deliveryId === d.id) })),
   };
 }

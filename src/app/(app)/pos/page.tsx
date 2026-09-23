@@ -27,7 +27,10 @@ export default async function PoListPage({ searchParams }: { searchParams: Promi
     params.push(clientId);
   }
   if (q) {
-    where.push("(po.po_number LIKE ? OR c.name LIKE ? OR s.name LIKE ?)");
+    where.push(
+      `(po.po_number LIKE ? OR c.name LIKE ? OR EXISTS (
+         SELECT 1 FROM po_items x JOIN suppliers s ON s.id = x.supplier_id WHERE x.po_id = po.id AND s.name LIKE ?))`,
+    );
     params.push(`%${q}%`, `%${q}%`, `%${q}%`);
   }
 
@@ -40,19 +43,20 @@ export default async function PoListPage({ searchParams }: { searchParams: Promi
     vatRate: number;
     discount: number;
     clientName: string;
-    supplierName: string;
+    supplierName: string | null;
     subtotal: number;
     lines: number;
   }>(
     `SELECT po.id, po.po_number AS poNumber, po.po_date AS poDate, po.expected_date AS expectedDate, po.status,
-            po.vat_rate AS vatRate, po.discount, c.name AS clientName, s.name AS supplierName,
+            po.vat_rate AS vatRate, po.discount, c.name AS clientName,
+            (SELECT GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ', ')
+             FROM po_items x JOIN suppliers s ON s.id = x.supplier_id WHERE x.po_id = po.id) AS supplierName,
             COALESCE(SUM(pi.quantity * pi.unit_cost), 0) AS subtotal, COUNT(pi.id) AS \`lines\`
      FROM purchase_orders po
      JOIN clients c ON c.id = po.client_id
-     JOIN suppliers s ON s.id = po.supplier_id
      LEFT JOIN po_items pi ON pi.po_id = po.id
      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-     GROUP BY po.id, c.name, s.name
+     GROUP BY po.id, c.name
      ORDER BY po.po_date DESC, po.id DESC
      LIMIT 300`,
     params,

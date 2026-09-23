@@ -23,7 +23,6 @@ export default async function NewPoPage({ searchParams }: { searchParams: Promis
         materials={opts.materials}
         initial={{
           clientId,
-          supplierId: "",
           poDate: todayPH(),
           expectedDate: "",
           deliveryAddress: opts.clients.find((c) => c.id === clientId)?.address ?? "",

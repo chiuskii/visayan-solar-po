@@ -9,11 +9,10 @@ import { peso } from "@/lib/format";
 type Option = { id: number; name: string };
 type ClientOpt = Option & { address: string | null };
 type SupplierOpt = Option & { paymentTerms: string | null };
-type MaterialOpt = { id: number; name: string; spec: string | null; unit: string; defaultCost: number };
+type MaterialOpt = { id: number; name: string; spec: string | null; unit: string; defaultCost: number; defaultSupplierId: number | null };
 
 export type PoFormValues = {
   clientId: number | "";
-  supplierId: number | "";
   poDate: string;
   expectedDate: string;
   deliveryAddress: string;
@@ -27,6 +26,7 @@ export type PoFormValues = {
 type Line = {
   key: string;
   id?: number;
+  supplierId: number | "";
   materialId: number | null;
   description: string;
   spec: string;
@@ -38,7 +38,16 @@ type Line = {
 
 let keySeq = 0;
 const newKey = () => `n${++keySeq}`;
-export const blankLine = (): Line => ({ key: newKey(), materialId: null, description: "", spec: "", unit: "pcs", quantity: "", unitCost: "" });
+export const blankLine = (supplierId: number | "" = ""): Line => ({
+  key: newKey(),
+  supplierId,
+  materialId: null,
+  description: "",
+  spec: "",
+  unit: "pcs",
+  quantity: "",
+  unitCost: "",
+});
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -74,14 +83,41 @@ export function PoForm({
     return { subtotal, net, vat, total: r2(net + vat) };
   }, [lines, discount, vatRate]);
 
+  // Per-supplier subtotals, shown when the PO buys from more than one supplier.
+  const supplierSubtotals = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const l of lines) {
+      if (l.supplierId === "") continue;
+      map.set(l.supplierId, (map.get(l.supplierId) ?? 0) + (Number(l.quantity) || 0) * (Number(l.unitCost) || 0));
+    }
+    return [...map.entries()].map(([id, amount]) => ({ name: suppliers.find((s) => s.id === id)?.name ?? "—", amount: r2(amount) }));
+  }, [lines, suppliers]);
+
   const update = (key: string, patch: Partial<Line>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
 
   function pickMaterial(key: string, value: string) {
     if (!value) return update(key, { materialId: null });
     const m = materials.find((x) => x.id === Number(value));
     if (!m) return;
-    update(key, { materialId: m.id, description: m.name, spec: m.spec ?? "", unit: m.unit, unitCost: m.defaultCost ? String(m.defaultCost) : "" });
+    setLines((ls) =>
+      ls.map((l) =>
+        l.key === key
+          ? {
+              ...l,
+              materialId: m.id,
+              description: m.name,
+              spec: m.spec ?? "",
+              unit: m.unit,
+              unitCost: m.defaultCost ? String(m.defaultCost) : "",
+              supplierId: m.defaultSupplierId ?? l.supplierId,
+            }
+          : l,
+      ),
+    );
   }
+
+  // New lines start with the previous line's supplier.
+  const addLine = () => setLines((ls) => [...ls, blankLine(ls.at(-1)?.supplierId ?? "")]);
 
   function pickClient(value: string) {
     const id = value ? Number(value) : "";
@@ -90,16 +126,12 @@ export function PoForm({
     if (c?.address && !deliveryAddress) setDeliveryAddress(c.address);
   }
 
-  function pickSupplier(value: string) {
-    const s = suppliers.find((x) => x.id === Number(value));
-    if (s?.paymentTerms && !terms) setTerms(s.paymentTerms);
-  }
-
   const itemsJson = JSON.stringify(
     lines
       .filter((l) => l.description.trim() || l.quantity || l.unitCost)
       .map((l) => ({
         id: l.id,
+        supplierId: l.supplierId === "" ? null : l.supplierId,
         materialId: l.materialId,
         description: l.description,
         spec: l.spec,
@@ -126,18 +158,6 @@ export function PoForm({
             <p className="mt-1 text-xs text-slate-500">No clients yet — <Link className="text-brand-600 underline" href="/clients/new">add one</Link>.</p>
           )}
         </div>
-        <div className="sm:col-span-2">
-          <label className="label" htmlFor="supplierId">Supplier *</label>
-          <select id="supplierId" name="supplierId" className="input" defaultValue={initial.supplierId} onChange={(e) => pickSupplier(e.target.value)} required>
-            <option value="">Choose a supplier…</option>
-            {suppliers.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
-          {suppliers.length === 0 && (
-            <p className="mt-1 text-xs text-slate-500">No suppliers yet — <Link className="text-brand-600 underline" href="/suppliers/new">add one</Link>.</p>
-          )}
-        </div>
         <div>
           <label className="label" htmlFor="poDate">PO date *</label>
           <input id="poDate" name="poDate" type="date" className="input" defaultValue={initial.poDate} required />
@@ -148,7 +168,7 @@ export function PoForm({
         </div>
         <div className="sm:col-span-2">
           <label className="label" htmlFor="terms">Payment terms</label>
-          <input id="terms" name="terms" className="input" value={terms} onChange={(e) => setTerms(e.target.value)} placeholder="e.g. 30 days, 50% DP" />
+          <input id="terms" name="terms" className="input" value={terms} onChange={(e) => setTerms(e.target.value)} placeholder="Blank = each supplier’s own terms" />
         </div>
         <div className="sm:col-span-2 lg:col-span-4">
           <label className="label" htmlFor="deliveryAddress">Deliver to</label>
@@ -159,12 +179,18 @@ export function PoForm({
       <section className="card overflow-x-auto">
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <h2>Materials</h2>
-          <button type="button" className="btn btn-sm" onClick={() => setLines((ls) => [...ls, blankLine()])}>+ Add line</button>
+          <button type="button" className="btn btn-sm" onClick={addLine}>+ Add line</button>
         </div>
-        <table className="table min-w-[900px]">
+        {suppliers.length === 0 && (
+          <p className="border-b border-slate-200 px-4 py-2 text-xs text-slate-500">
+            No suppliers yet — <Link className="text-brand-600 underline" href="/suppliers/new">add one</Link> before creating a PO.
+          </p>
+        )}
+        <table className="table min-w-[1080px]">
           <thead>
             <tr>
               <th className="w-56">Pick from list</th>
+              <th className="w-48">Supplier *</th>
               <th>Description *</th>
               <th className="w-36">Brand / spec</th>
               <th className="w-20">Unit</th>
@@ -185,6 +211,19 @@ export function PoForm({
                       <option value="">— Custom item —</option>
                       {materials.map((m) => (
                         <option key={m.id} value={m.id}>{m.name}{m.spec ? ` (${m.spec})` : ""}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      className="input"
+                      value={l.supplierId}
+                      onChange={(e) => update(l.key, { supplierId: e.target.value ? Number(e.target.value) : "" })}
+                      aria-label="Supplier"
+                    >
+                      <option value="">Choose…</option>
+                      {suppliers.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
                       ))}
                     </select>
                   </td>
@@ -222,6 +261,12 @@ export function PoForm({
           <textarea id="notes" name="notes" rows={5} className="input" defaultValue={initial.notes} />
         </div>
         <div className="card space-y-3 p-5 text-sm">
+          {supplierSubtotals.length > 1 &&
+            supplierSubtotals.map((s) => (
+              <div key={s.name} className="flex justify-between text-xs text-slate-500">
+                <span>{s.name}</span><span className="tabular-nums">{peso(s.amount)}</span>
+              </div>
+            ))}
           <div className="flex justify-between"><span className="text-slate-500">Subtotal</span><span className="tabular-nums">{peso(totals.subtotal)}</span></div>
           <div className="flex items-center justify-between gap-3">
             <label htmlFor="discount" className="text-slate-500">Discount (₱)</label>
