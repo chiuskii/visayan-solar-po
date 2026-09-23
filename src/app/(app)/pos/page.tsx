@@ -1,8 +1,7 @@
-import { and, desc, eq, like, or, sql, type SQL } from "drizzle-orm";
 import Link from "next/link";
 import { Empty, PageHeader, StatusBadge } from "@/components/ui";
-import { db } from "@/db";
-import { clients, PO_STATUSES, poItems, purchaseOrders, suppliers } from "@/db/schema";
+import { query } from "@/db";
+import { PO_STATUSES, type PoStatus } from "@/db/types";
 import { requireUser } from "@/lib/auth";
 import { fmtDate, peso, STATUS_LABEL } from "@/lib/format";
 
@@ -17,36 +16,49 @@ export default async function PoListPage({ searchParams }: { searchParams: Promi
   const status = PO_STATUSES.includes(sp.status as never) ? (sp.status as (typeof PO_STATUSES)[number]) : undefined;
   const clientId = Number(sp.client) || undefined;
 
-  const where: SQL[] = [];
-  if (status) where.push(eq(purchaseOrders.status, status));
-  if (clientId) where.push(eq(purchaseOrders.clientId, clientId));
-  if (q) where.push(or(like(purchaseOrders.poNumber, `%${q}%`), like(clients.name, `%${q}%`), like(suppliers.name, `%${q}%`))!);
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (status) {
+    where.push("po.status = ?");
+    params.push(status);
+  }
+  if (clientId) {
+    where.push("po.client_id = ?");
+    params.push(clientId);
+  }
+  if (q) {
+    where.push("(po.po_number LIKE ? OR c.name LIKE ? OR s.name LIKE ?)");
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+  }
 
-  const subtotal = sql<string>`COALESCE(SUM(${poItems.quantity} * ${poItems.unitCost}), 0)`;
-  const rows = await db
-    .select({
-      id: purchaseOrders.id,
-      poNumber: purchaseOrders.poNumber,
-      poDate: purchaseOrders.poDate,
-      expectedDate: purchaseOrders.expectedDate,
-      status: purchaseOrders.status,
-      vatRate: purchaseOrders.vatRate,
-      discount: purchaseOrders.discount,
-      clientName: clients.name,
-      supplierName: suppliers.name,
-      subtotal,
-      lines: sql<number>`COUNT(${poItems.id})`,
-    })
-    .from(purchaseOrders)
-    .innerJoin(clients, eq(clients.id, purchaseOrders.clientId))
-    .innerJoin(suppliers, eq(suppliers.id, purchaseOrders.supplierId))
-    .leftJoin(poItems, eq(poItems.poId, purchaseOrders.id))
-    .where(where.length ? and(...where) : undefined)
-    .groupBy(purchaseOrders.id, clients.name, suppliers.name)
-    .orderBy(desc(purchaseOrders.poDate), desc(purchaseOrders.id))
-    .limit(300);
+  const rows = await query<{
+    id: number;
+    poNumber: string;
+    poDate: string;
+    expectedDate: string | null;
+    status: PoStatus;
+    vatRate: number;
+    discount: number;
+    clientName: string;
+    supplierName: string;
+    subtotal: number;
+    lines: number;
+  }>(
+    `SELECT po.id, po.po_number AS poNumber, po.po_date AS poDate, po.expected_date AS expectedDate, po.status,
+            po.vat_rate AS vatRate, po.discount, c.name AS clientName, s.name AS supplierName,
+            COALESCE(SUM(pi.quantity * pi.unit_cost), 0) AS subtotal, COUNT(pi.id) AS \`lines\`
+     FROM purchase_orders po
+     JOIN clients c ON c.id = po.client_id
+     JOIN suppliers s ON s.id = po.supplier_id
+     LEFT JOIN po_items pi ON pi.po_id = po.id
+     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+     GROUP BY po.id, c.name, s.name
+     ORDER BY po.po_date DESC, po.id DESC
+     LIMIT 300`,
+    params,
+  );
 
-  const clientOpts = await db.select({ id: clients.id, name: clients.name }).from(clients).orderBy(clients.name);
+  const clientOpts = await query<{ id: number; name: string }>("SELECT id, name FROM clients ORDER BY name");
   const total = (r: (typeof rows)[number]) => {
     const net = Math.max(0, Number(r.subtotal) - r.discount);
     return net + (net * r.vatRate) / 100;

@@ -1,11 +1,10 @@
 "use server";
 
-import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { db } from "@/db";
-import { deliveries, deliveryItems, poItems, purchaseOrders } from "@/db/schema";
+import { execute, query, queryOne, transaction } from "@/db";
+import { toRow, type PoItem, type PoStatus } from "@/db/types";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { nextPoNumber, poHasDeliveries, receivedByItem, refreshDeliveryStatus, round2 } from "@/lib/po";
 
@@ -89,11 +88,17 @@ export async function createPo(_prev: FormState, formData: FormData): Promise<Fo
   let newId = 0;
   for (let attempt = 0; attempt < 3 && !newId; attempt++) {
     try {
-      newId = await db.transaction(async (tx) => {
+      newId = await transaction(async (conn) => {
         const poNumber = await nextPoNumber(header.poDate);
-        const [res] = await tx.insert(purchaseOrders).values({ ...header, poNumber, status, createdById: user.id });
+        const res = await execute(
+          "INSERT INTO purchase_orders SET ?",
+          [toRow("purchase_orders", { ...header, poNumber, status, createdById: user.id })],
+          conn,
+        );
         const poId = res.insertId;
-        await tx.insert(poItems).values(items.map(({ id: _id, ...it }) => ({ ...it, poId })));
+        for (const { id: _id, ...it } of items) {
+          await execute("INSERT INTO po_items SET ?", [toRow("po_items", { ...it, poId })], conn);
+        }
         return poId;
       });
     } catch (e) {
@@ -111,11 +116,11 @@ export async function updatePo(poId: number, _prev: FormState, formData: FormDat
   if ("error" in parsed) return { error: parsed.error };
   const { items, ...header } = parsed.data;
 
-  const [po] = await db.select().from(purchaseOrders).where(eq(purchaseOrders.id, poId)).limit(1);
+  const po = await queryOne<{ status: PoStatus }>("SELECT status FROM purchase_orders WHERE id = ?", [poId]);
   if (!po) return { error: "This PO no longer exists." };
   if (po.status === "CANCELLED") return { error: "Reopen this PO before editing it." };
 
-  const existing = await db.select({ id: poItems.id }).from(poItems).where(eq(poItems.poId, poId));
+  const existing = await query<{ id: number }>("SELECT id FROM po_items WHERE po_id = ?", [poId]);
   const existingIds = new Set(existing.map((e) => e.id));
   const received = await receivedByItem([...existingIds]);
   const keptIds = new Set(items.filter((i) => i.id && existingIds.has(i.id)).map((i) => i.id!));
@@ -127,15 +132,15 @@ export async function updatePo(poId: number, _prev: FormState, formData: FormDat
     if (it.quantity < qty) return { error: `“${it.description}” already has ${qty} received. Quantity can’t be lower than that.` };
   }
 
-  await db.transaction(async (tx) => {
-    await tx.update(purchaseOrders).set(header).where(eq(purchaseOrders.id, poId));
+  await transaction(async (conn) => {
+    await execute("UPDATE purchase_orders SET ? WHERE id = ?", [toRow("purchase_orders", header), poId], conn);
     const toDelete = [...existingIds].filter((id) => !keptIds.has(id));
-    if (toDelete.length) await tx.delete(poItems).where(and(eq(poItems.poId, poId), inArray(poItems.id, toDelete)));
+    if (toDelete.length) await execute("DELETE FROM po_items WHERE po_id = ? AND id IN (?)", [poId, toDelete], conn);
     for (const { id, ...it } of items) {
       if (id && existingIds.has(id)) {
-        await tx.update(poItems).set(it).where(and(eq(poItems.id, id), eq(poItems.poId, poId)));
+        await execute("UPDATE po_items SET ? WHERE id = ? AND po_id = ?", [toRow("po_items", it), id, poId], conn);
       } else {
-        await tx.insert(poItems).values({ ...it, poId });
+        await execute("INSERT INTO po_items SET ?", [toRow("po_items", { ...it, poId })], conn);
       }
     }
   });
@@ -147,27 +152,24 @@ export async function updatePo(poId: number, _prev: FormState, formData: FormDat
 
 export async function markOrdered(poId: number, _fd: FormData) {
   await requireUser();
-  await db
-    .update(purchaseOrders)
-    .set({ status: "ORDERED" })
-    .where(and(eq(purchaseOrders.id, poId), eq(purchaseOrders.status, "DRAFT")));
+  await execute("UPDATE purchase_orders SET status = 'ORDERED' WHERE id = ? AND status = 'DRAFT'", [poId]);
   await refreshDeliveryStatus(poId);
   revalidatePath(`/pos/${poId}`);
 }
 
 export async function cancelPo(poId: number, _fd: FormData) {
   await requireUser();
-  await db.update(purchaseOrders).set({ status: "CANCELLED" }).where(eq(purchaseOrders.id, poId));
+  await execute("UPDATE purchase_orders SET status = 'CANCELLED' WHERE id = ?", [poId]);
   revalidatePath(`/pos/${poId}`);
 }
 
 export async function reopenPo(poId: number, _fd: FormData) {
   await requireUser();
   const hasDeliveries = await poHasDeliveries(poId);
-  await db
-    .update(purchaseOrders)
-    .set({ status: hasDeliveries ? "ORDERED" : "DRAFT" })
-    .where(and(eq(purchaseOrders.id, poId), eq(purchaseOrders.status, "CANCELLED")));
+  await execute("UPDATE purchase_orders SET status = ? WHERE id = ? AND status = 'CANCELLED'", [
+    hasDeliveries ? "ORDERED" : "DRAFT",
+    poId,
+  ]);
   await refreshDeliveryStatus(poId);
   revalidatePath(`/pos/${poId}`);
 }
@@ -175,14 +177,14 @@ export async function reopenPo(poId: number, _fd: FormData) {
 export async function deletePo(poId: number, _fd: FormData) {
   await requireAdmin();
   if (await poHasDeliveries(poId)) redirect(`/pos/${poId}?error=has-deliveries`);
-  await db.delete(purchaseOrders).where(eq(purchaseOrders.id, poId));
+  await execute("DELETE FROM purchase_orders WHERE id = ?", [poId]);
   revalidatePath("/pos");
   redirect("/pos");
 }
 
 export async function createDelivery(poId: number, _prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
-  const [po] = await db.select({ status: purchaseOrders.status }).from(purchaseOrders).where(eq(purchaseOrders.id, poId));
+  const po = await queryOne<{ status: PoStatus }>("SELECT status FROM purchase_orders WHERE id = ?", [poId]);
   if (!po) return { error: "This PO no longer exists." };
   if (po.status === "DRAFT") return { error: "Mark this PO as ordered before recording deliveries." };
   if (po.status === "CANCELLED") return { error: "This PO is cancelled." };
@@ -193,7 +195,10 @@ export async function createDelivery(poId: number, _prev: FormState, formData: F
   const receivedBy = String(formData.get("receivedBy") ?? "").trim().slice(0, 120) || null;
   const notes = String(formData.get("notes") ?? "").trim().slice(0, 2000) || null;
 
-  const items = await db.select().from(poItems).where(eq(poItems.poId, poId));
+  const items = await query<Pick<PoItem, "id" | "description" | "unit" | "quantity">>(
+    "SELECT id, description, unit, quantity FROM po_items WHERE po_id = ?",
+    [poId],
+  );
   const received = await receivedByItem(items.map((i) => i.id));
   const lines: { poItemId: number; quantity: number }[] = [];
   for (const it of items) {
@@ -208,11 +213,17 @@ export async function createDelivery(poId: number, _prev: FormState, formData: F
   }
   if (lines.length === 0) return { error: "Enter the quantity received for at least one line." };
 
-  await db.transaction(async (tx) => {
-    const [res] = await tx
-      .insert(deliveries)
-      .values({ poId, deliveryDate, drNumber, receivedBy, notes, createdById: user.id });
-    await tx.insert(deliveryItems).values(lines.map((l) => ({ ...l, deliveryId: res.insertId })));
+  await transaction(async (conn) => {
+    const res = await execute(
+      "INSERT INTO deliveries SET ?",
+      [toRow("deliveries", { poId, deliveryDate, drNumber, receivedBy, notes, createdById: user.id })],
+      conn,
+    );
+    await execute(
+      "INSERT INTO delivery_items (delivery_id, po_item_id, quantity) VALUES ?",
+      [lines.map((l) => [res.insertId, l.poItemId, l.quantity])],
+      conn,
+    );
   });
   await refreshDeliveryStatus(poId);
   revalidatePath(`/pos/${poId}`);
@@ -222,7 +233,7 @@ export async function createDelivery(poId: number, _prev: FormState, formData: F
 
 export async function deleteDelivery(poId: number, deliveryId: number, _fd: FormData) {
   await requireAdmin();
-  await db.delete(deliveries).where(and(eq(deliveries.id, deliveryId), eq(deliveries.poId, poId)));
+  await execute("DELETE FROM deliveries WHERE id = ? AND po_id = ?", [deliveryId, poId]);
   await refreshDeliveryStatus(poId);
   revalidatePath(`/pos/${poId}`);
 }

@@ -1,8 +1,7 @@
-import { desc, eq, inArray, sql } from "drizzle-orm";
 import Link from "next/link";
 import { Empty, PageHeader, StatusBadge } from "@/components/ui";
-import { db } from "@/db";
-import { clients, poItems, purchaseOrders, suppliers } from "@/db/schema";
+import { query, queryOne } from "@/db";
+import type { PoStatus } from "@/db/types";
 import { requireUser } from "@/lib/auth";
 import { fmtDate, peso, todayPH } from "@/lib/format";
 
@@ -12,33 +11,35 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const user = await requireUser();
   const { denied } = await searchParams;
 
-  const counts = await db
-    .select({ status: purchaseOrders.status, n: sql<number>`COUNT(*)` })
-    .from(purchaseOrders)
-    .groupBy(purchaseOrders.status);
+  const counts = await query<{ status: PoStatus; n: number }>(
+    "SELECT status, COUNT(*) AS n FROM purchase_orders GROUP BY status",
+  );
   const count = (s: string) => Number(counts.find((c) => c.status === s)?.n ?? 0);
 
-  const [openValue] = await db
-    .select({ v: sql<string>`COALESCE(SUM(${poItems.quantity} * ${poItems.unitCost}), 0)` })
-    .from(poItems)
-    .innerJoin(purchaseOrders, eq(purchaseOrders.id, poItems.poId))
-    .where(inArray(purchaseOrders.status, ["ORDERED", "PARTIAL"]));
+  const openValue = await queryOne<{ v: number }>(
+    `SELECT COALESCE(SUM(pi.quantity * pi.unit_cost), 0) AS v
+     FROM po_items pi
+     JOIN purchase_orders po ON po.id = pi.po_id
+     WHERE po.status IN ('ORDERED', 'PARTIAL')`,
+  );
 
-  const open = await db
-    .select({
-      id: purchaseOrders.id,
-      poNumber: purchaseOrders.poNumber,
-      status: purchaseOrders.status,
-      expectedDate: purchaseOrders.expectedDate,
-      clientName: clients.name,
-      supplierName: suppliers.name,
-    })
-    .from(purchaseOrders)
-    .innerJoin(clients, eq(clients.id, purchaseOrders.clientId))
-    .innerJoin(suppliers, eq(suppliers.id, purchaseOrders.supplierId))
-    .where(inArray(purchaseOrders.status, ["DRAFT", "ORDERED", "PARTIAL"]))
-    .orderBy(sql`${purchaseOrders.expectedDate} IS NULL`, purchaseOrders.expectedDate, desc(purchaseOrders.id))
-    .limit(15);
+  const open = await query<{
+    id: number;
+    poNumber: string;
+    status: PoStatus;
+    expectedDate: string | null;
+    clientName: string;
+    supplierName: string;
+  }>(
+    `SELECT po.id, po.po_number AS poNumber, po.status, po.expected_date AS expectedDate,
+            c.name AS clientName, s.name AS supplierName
+     FROM purchase_orders po
+     JOIN clients c ON c.id = po.client_id
+     JOIN suppliers s ON s.id = po.supplier_id
+     WHERE po.status IN ('DRAFT', 'ORDERED', 'PARTIAL')
+     ORDER BY po.expected_date IS NULL, po.expected_date, po.id DESC
+     LIMIT 15`,
+  );
 
   const today = todayPH();
   const tiles = [

@@ -2,7 +2,7 @@
 
 Purchase orders for Visayan Solar: clients, suppliers, materials, POs with line items, delivery tracking, and a printable PO.
 
-**Stack:** Next.js 16 (TypeScript) · MySQL 8 · Drizzle ORM · Tailwind CSS · Docker (dev + prod)
+**Stack:** Next.js 16 (TypeScript) · MySQL 8 (plain SQL via mysql2) · Tailwind CSS · Docker (dev + prod)
 
 ---
 
@@ -96,10 +96,10 @@ src/
     actions/        server actions (save PO, record delivery, users, settings)
     api/health/     health check → {"ok": true}
   components/       UI pieces (PO form, delivery form, lists)
-  db/schema.ts      database tables
+  db/              MySQL pool + query helpers (index.ts), row types (types.ts)
   lib/              auth, PO helpers, formatting
   proxy.ts          sends signed-out visitors to /login
-drizzle/            SQL migrations (applied automatically)
+migrations/         SQL migrations (applied automatically)
 scripts/            migrate, seed, wait-for-db (used by Docker)
 Dockerfile          dev + prod targets
 docker-compose.dev.yml / docker-compose.prod.yml
@@ -107,9 +107,9 @@ docker-compose.dev.yml / docker-compose.prod.yml
 
 ## 6. Changing the database
 
-1. Edit `src/db/schema.ts`
-2. Generate a migration: `npm run db:generate` (with the dev DB running and `DATABASE_URL` from `.env`)
-3. Restart the app container — the migration is applied on start.
+1. Add a new file in `migrations/` with the next number, e.g. `0001_add_po_remarks.sql`, containing the plain SQL (`ALTER TABLE ...`). Never edit a file that has already been applied.
+2. Update the matching type and column list in `src/db/types.ts`.
+3. Restart the app container — the migration is applied on start (or run `npm run db:migrate`).
 
 ## 7. Running without Docker (optional)
 

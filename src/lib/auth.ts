@@ -1,10 +1,9 @@
 import "server-only";
-import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
-import { db } from "@/db";
-import { users } from "@/db/schema";
+import { queryOne } from "@/db";
+import type { User } from "@/db/types";
 import { SESSION_COOKIE, SESSION_DAYS, signSession, verifySession } from "./session-token";
 
 export type CurrentUser = { id: number; name: string; email: string; role: "ADMIN" | "STAFF" };
@@ -29,11 +28,10 @@ export async function destroySession() {
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const session = await verifySession((await cookies()).get(SESSION_COOKIE)?.value);
   if (!session) return null;
-  const [row] = await db
-    .select({ id: users.id, name: users.name, email: users.email, role: users.role, active: users.active })
-    .from(users)
-    .where(eq(users.id, session.userId))
-    .limit(1);
+  const row = await queryOne<Pick<User, "id" | "name" | "email" | "role" | "active">>(
+    "SELECT id, name, email, role, active FROM users WHERE id = ?",
+    [session.userId],
+  );
   if (!row || !row.active) return null;
   return { id: row.id, name: row.name, email: row.email, role: row.role };
 });

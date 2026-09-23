@@ -1,14 +1,13 @@
 "use server";
 
-import { asc, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { db } from "@/db";
-import { clients, materials, purchaseOrders, suppliers } from "@/db/schema";
+import { execute, query, queryOne } from "@/db";
+import { toRow, type Client, type Material, type Supplier } from "@/db/types";
 import { requireUser } from "@/lib/auth";
 import { MASTERS, type MasterKey } from "@/lib/masters";
 
-const TABLES = { clients, suppliers, materials } as const;
+const TABLES = { clients: "clients", suppliers: "suppliers", materials: "materials" } as const;
 
 export type FormState = { error?: string };
 
@@ -40,9 +39,9 @@ export async function saveMaster(entity: MasterKey, id: number | null, _prev: Fo
   }
   const table = TABLES[entity];
   if (id) {
-    await db.update(table).set(values as never).where(eq(table.id, id));
+    await execute(`UPDATE ${table} SET ? WHERE id = ?`, [toRow(table, values), id]);
   } else {
-    await db.insert(table).values(values as never);
+    await execute(`INSERT INTO ${table} SET ?`, [toRow(table, values)]);
   }
   revalidatePath(`/${entity}`);
   redirect(`/${entity}`);
@@ -51,12 +50,13 @@ export async function saveMaster(entity: MasterKey, id: number | null, _prev: Fo
 export async function deleteMaster(entity: MasterKey, id: number, _formData: FormData) {
   await requireUser();
   const table = TABLES[entity];
+  if (!table) return;
   if (entity === "clients" || entity === "suppliers") {
-    const col = entity === "clients" ? purchaseOrders.clientId : purchaseOrders.supplierId;
-    const [row] = await db.select({ n: sql<number>`COUNT(*)` }).from(purchaseOrders).where(eq(col, id));
+    const col = entity === "clients" ? "client_id" : "supplier_id";
+    const row = await queryOne<{ n: number }>(`SELECT COUNT(*) AS n FROM purchase_orders WHERE ${col} = ?`, [id]);
     if (Number(row?.n) > 0) redirect(`/${entity}/${id}?error=in-use`);
   }
-  await db.delete(table).where(eq(table.id, id));
+  await execute(`DELETE FROM ${table} WHERE id = ?`, [id]);
   revalidatePath(`/${entity}`);
   redirect(`/${entity}`);
 }
@@ -64,15 +64,11 @@ export async function deleteMaster(entity: MasterKey, id: number, _formData: For
 export async function listForPicker() {
   await requireUser();
   const [c, s, m] = await Promise.all([
-    db.select({ id: clients.id, name: clients.name, address: clients.address }).from(clients).orderBy(asc(clients.name)),
-    db
-      .select({ id: suppliers.id, name: suppliers.name, paymentTerms: suppliers.paymentTerms })
-      .from(suppliers)
-      .orderBy(asc(suppliers.name)),
-    db
-      .select({ id: materials.id, name: materials.name, spec: materials.spec, unit: materials.unit, defaultCost: materials.defaultCost })
-      .from(materials)
-      .orderBy(asc(materials.name), asc(materials.spec)),
+    query<Pick<Client, "id" | "name" | "address">>("SELECT id, name, address FROM clients ORDER BY name"),
+    query<Pick<Supplier, "id" | "name" | "paymentTerms">>("SELECT id, name, payment_terms AS paymentTerms FROM suppliers ORDER BY name"),
+    query<Pick<Material, "id" | "name" | "spec" | "unit" | "defaultCost">>(
+      "SELECT id, name, spec, unit, default_cost AS defaultCost FROM materials ORDER BY name, spec",
+    ),
   ]);
   return { clients: c, suppliers: s, materials: m };
 }

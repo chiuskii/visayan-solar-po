@@ -10,9 +10,10 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # Project notes — Visayan Solar PO System
 
-- Stack: Next.js 16 (App Router, TypeScript), Drizzle ORM + mysql2, MySQL 8, Tailwind CSS 4, zod.
+- Stack: Next.js 16 (App Router, TypeScript), plain SQL with mysql2 (no ORM), MySQL 8, Tailwind CSS 4, zod.
 - Route guard lives in `src/proxy.ts` (Next 16 renamed middleware → proxy). Server actions re-check auth with `requireUser()` / `requireAdmin()` from `src/lib/auth.ts`.
-- Database schema: `src/db/schema.ts`. After changing it run `npm run db:generate` to create a SQL migration in `drizzle/`, then `npm run db:migrate`.
+- Database access: `query` / `queryOne` / `execute` / `transaction` from `src/db/index.ts`. Always pass values as `?` params, never interpolate them. Row types and the camelCase→column map live in `src/db/types.ts`; use `cols(table, alias)` for SELECT lists and `toRow(table, values)` with `INSERT ... SET ?` / `UPDATE ... SET ?`.
+- Schema changes: add a new numbered SQL file in `migrations/` (never edit an applied one), update `src/db/types.ts`, then `npm run db:migrate`.
 - Server actions live in `src/app/actions/`. Client forms use `useFormAction` from `src/components/client-ui.tsx` so fields are kept when validation fails.
 - PO status is derived from deliveries by `refreshDeliveryStatus()` in `src/lib/po.ts` — call it after anything that changes items or deliveries.
-- Money and quantities are DECIMAL columns read as numbers (`mode: "number"`); round with `round2()`.
+- Money and quantities are DECIMAL columns read as numbers (pool option `decimalNumbers`); booleans come back as true/false. Round with `round2()`.

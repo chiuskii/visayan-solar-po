@@ -36,7 +36,7 @@ ENV NODE_ENV=production
 COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/.next ./.next
 COPY --chown=node:node public ./public
-COPY --chown=node:node drizzle ./drizzle
+COPY --chown=node:node migrations ./migrations
 COPY --chown=node:node scripts ./scripts
 COPY --chown=node:node package.json next.config.mjs ./
 USER node

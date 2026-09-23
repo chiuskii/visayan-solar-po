@@ -36,7 +36,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
       TZ: Asia/Manila
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "${APP_PORT:-3300}:3000"
 
 volumes:
   mysql_prod_data:

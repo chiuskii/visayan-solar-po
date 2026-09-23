@@ -1,18 +1,16 @@
-import { asc } from "drizzle-orm";
 import Link from "next/link";
 import { PageHeader } from "@/components/ui";
-import { db } from "@/db";
-import { users } from "@/db/schema";
+import { query } from "@/db";
+import type { User } from "@/db/types";
 import { requireAdmin } from "@/lib/auth";
 
 export const metadata = { title: "Users" };
 
 export default async function UsersPage() {
   await requireAdmin();
-  const rows = await db
-    .select({ id: users.id, name: users.name, email: users.email, role: users.role, active: users.active })
-    .from(users)
-    .orderBy(asc(users.name));
+  const rows = await query<Pick<User, "id" | "name" | "email" | "role" | "active">>(
+    "SELECT id, name, email, role, active FROM users ORDER BY name",
+  );
   return (
     <>
       <PageHeader title="Users" subtitle="Who can sign in to the PO system." actions={<Link href="/users/new" className="btn btn-primary">+ New user</Link>} />

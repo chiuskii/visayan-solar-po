@@ -1,9 +1,8 @@
-import { asc, eq, like } from "drizzle-orm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { deleteMaster } from "@/app/actions/masters";
-import { db } from "@/db";
-import { clients, materials, suppliers } from "@/db/schema";
+import { query, queryOne } from "@/db";
+import { cols } from "@/db/types";
 import { requireUser } from "@/lib/auth";
 import { peso } from "@/lib/format";
 import { MASTERS, type MasterKey } from "@/lib/masters";
@@ -11,19 +10,17 @@ import { ConfirmButton } from "./client-ui";
 import { MasterForm } from "./master-form";
 import { Empty, PageHeader } from "./ui";
 
-const TABLES = { clients, suppliers, materials } as const;
+const TABLES = { clients: "clients", suppliers: "suppliers", materials: "materials" } as const;
 
 export async function MasterListPage({ entity, q }: { entity: MasterKey; q?: string }) {
   await requireUser();
   const cfg = MASTERS[entity];
   const table = TABLES[entity];
   const search = (q ?? "").trim();
-  const rows = (await db
-    .select()
-    .from(table)
-    .where(search ? like(table.name, `%${search}%`) : undefined)
-    .orderBy(asc(table.name))
-    .limit(500)) as Record<string, unknown>[];
+  const rows = await query<Record<string, unknown>>(
+    `SELECT ${cols(table)} FROM ${table} ${search ? "WHERE name LIKE ?" : ""} ORDER BY name LIMIT 500`,
+    search ? [`%${search}%`] : [],
+  );
 
   return (
     <>
@@ -93,7 +90,7 @@ export async function MasterEditPage({ entity, id, error }: { entity: MasterKey;
   const table = TABLES[entity];
   const numId = Number(id);
   if (!Number.isInteger(numId)) notFound();
-  const [row] = (await db.select().from(table).where(eq(table.id, numId)).limit(1)) as Record<string, unknown>[];
+  const row = await queryOne<Record<string, unknown>>(`SELECT ${cols(table)} FROM ${table} WHERE id = ?`, [numId]);
   if (!row) notFound();
   return (
     <>
