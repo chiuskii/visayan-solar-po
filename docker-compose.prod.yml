@@ -1,0 +1,42 @@
+# Production: optimized build + MySQL. Settings come from .env (copy .env.example).
+#   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+name: visayan-po
+
+services:
+  db:
+    image: mysql:8.4
+    restart: always
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-visayan_po}
+      MYSQL_USER: ${MYSQL_USER:-po_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      TZ: Asia/Manila
+    volumes:
+      - mysql_prod_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  app:
+    build:
+      context: .
+      target: prod
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://${MYSQL_USER:-po_user}:${MYSQL_PASSWORD}@db:3306/${MYSQL_DATABASE:-visayan_po}
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@visayansolar.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      TZ: Asia/Manila
+    ports:
+      - "${APP_PORT:-3000}:3000"
+
+volumes:
+  mysql_prod_data:

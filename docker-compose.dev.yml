@@ -1,0 +1,50 @@
+# Development: hot reload + MySQL.
+#   docker compose -f docker-compose.dev.yml up --build
+# App:   http://localhost:3000
+# MySQL: localhost:3307 (for VS Code database tools)
+name: visayan-po-dev
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: visayan_po
+      MYSQL_USER: po_user
+      MYSQL_PASSWORD: po_password
+      MYSQL_ROOT_PASSWORD: root_password
+      TZ: Asia/Manila
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_dev_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_password"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  app:
+    build:
+      context: .
+      target: dev
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://po_user:po_password@db:3306/visayan_po
+      AUTH_SECRET: dev-only-secret-change-me-dev-only-secret
+      COOKIE_SECURE: "false"
+      ADMIN_EMAIL: admin@visayansolar.local
+      ADMIN_PASSWORD: ChangeMe123!
+      WATCHPACK_POLLING: "true"
+      TZ: Asia/Manila
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+
+volumes:
+  mysql_dev_data:
