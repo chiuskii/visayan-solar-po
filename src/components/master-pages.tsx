@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { importMasterCsv } from "@/app/actions/master-csv";
-import { deleteMaster } from "@/app/actions/masters";
+import { bulkDeleteMaster, bulkUpdateMaster, deleteMaster } from "@/app/actions/masters";
 import { query, queryOne } from "@/db";
 import { cols } from "@/db/types";
 import { requireUser } from "@/lib/auth";
 import { peso } from "@/lib/format";
 import { csvColumn, MASTERS, type MasterKey } from "@/lib/masters";
+import { BulkEditForm } from "./bulk-edit-form";
+import { BulkSelect } from "./bulk-select";
 import { ConfirmButton } from "./client-ui";
 import { ImportForm } from "./import-form";
 import { MasterForm } from "./master-form";
@@ -14,7 +16,7 @@ import { Empty, PageHeader } from "./ui";
 
 const TABLES = { clients: "clients", suppliers: "suppliers", materials: "materials" } as const;
 
-export async function MasterListPage({ entity, q }: { entity: MasterKey; q?: string }) {
+export async function MasterListPage({ entity, q, updated }: { entity: MasterKey; q?: string; updated?: string }) {
   await requireUser();
   const cfg = MASTERS[entity];
   const table = TABLES[entity];
@@ -27,6 +29,55 @@ export async function MasterListPage({ entity, q }: { entity: MasterKey; q?: str
      ORDER BY t.name
      LIMIT 500`,
     search ? [`%${search}%`] : [],
+  );
+
+  const listTable = (
+    <div className="card overflow-x-auto">
+      {rows.length === 0 ? (
+        <Empty>
+          No {cfg.title.toLowerCase()} yet. <Link className="text-brand-600 underline" href={`/${entity}/new`}>Add the first one</Link>.
+        </Empty>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              {cfg.bulk && (
+                <th className="w-8">
+                  <input type="checkbox" data-bulk-all aria-label={`Select all ${cfg.title.toLowerCase()}`} />
+                </th>
+              )}
+              {cfg.columns.map((c) => (
+                <th key={c.name} className={c.money ? "num" : ""}>{c.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={String(r.id)} className="hover:bg-slate-50 has-[:checked]:bg-brand-50">
+                {cfg.bulk && (
+                  <td>
+                    <input type="checkbox" data-bulk-id={String(r.id)} aria-label={`Select ${String(r.name)}`} />
+                  </td>
+                )}
+                {cfg.columns.map((c, i) => (
+                  <td key={c.name} className={c.money ? "num" : "max-w-xs truncate"}>
+                    {i === 0 ? (
+                      <Link className="font-medium text-brand-700 hover:underline" href={`/${entity}/${r.id}`}>
+                        {String(r[c.name] ?? "")}
+                      </Link>
+                    ) : c.money ? (
+                      peso(r[c.name] as number)
+                    ) : (
+                      String(r[c.name] ?? "—")
+                    )}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 
   return (
@@ -46,46 +97,27 @@ export async function MasterListPage({ entity, q }: { entity: MasterKey; q?: str
           </>
         }
       />
+      {updated && (
+        <p className="ok-box mb-4">
+          Updated {Number(updated)} {Number(updated) === 1 ? cfg.singular.toLowerCase() : cfg.title.toLowerCase()}.
+        </p>
+      )}
       <form className="mb-4 flex max-w-md gap-2">
         <input className="input" name="q" defaultValue={search} placeholder={`Search ${cfg.title.toLowerCase()} by name`} />
         <button className="btn">Search</button>
       </form>
-      <div className="card overflow-x-auto">
-        {rows.length === 0 ? (
-          <Empty>
-            No {cfg.title.toLowerCase()} yet. <Link className="text-brand-600 underline" href={`/${entity}/new`}>Add the first one</Link>.
-          </Empty>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                {cfg.columns.map((c) => (
-                  <th key={c.name} className={c.money ? "num" : ""}>{c.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={String(r.id)} className="hover:bg-slate-50">
-                  {cfg.columns.map((c, i) => (
-                    <td key={c.name} className={c.money ? "num" : "max-w-xs truncate"}>
-                      {i === 0 ? (
-                        <Link className="font-medium text-brand-700 hover:underline" href={`/${entity}/${r.id}`}>
-                          {String(r[c.name] ?? "")}
-                        </Link>
-                      ) : c.money ? (
-                        peso(r[c.name] as number)
-                      ) : (
-                        String(r[c.name] ?? "—")
-                      )}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {cfg.bulk && rows.length > 0 ? (
+        <BulkSelect
+          entity={entity}
+          singular={cfg.singular.toLowerCase()}
+          plural={cfg.title.toLowerCase()}
+          bulkDelete={bulkDeleteMaster.bind(null, entity)}
+        >
+          {listTable}
+        </BulkSelect>
+      ) : (
+        listTable
+      )}
     </>
   );
 }
@@ -180,6 +212,36 @@ export async function MasterImportPage({ entity }: { entity: MasterKey }) {
         </section>
       </div>
       <ImportForm action={importMasterCsv.bind(null, entity)} listHref={`/${entity}`} noun={noun} />
+    </>
+  );
+}
+
+export async function MasterBulkEditPage({ entity, ids }: { entity: MasterKey; ids?: string }) {
+  await requireUser();
+  const cfg = MASTERS[entity];
+  if (!cfg.bulk) notFound();
+  const idList = [...new Set((ids ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 1000);
+  const [rows, suppliers] = await Promise.all([
+    idList.length
+      ? query<{ id: number; name: string }>(`SELECT id, name FROM ${TABLES[entity]} WHERE id IN (?) ORDER BY name`, [idList])
+      : Promise.resolve([]),
+    supplierOptions(entity),
+  ]);
+  const found = rows.map((r) => r.id);
+  return (
+    <>
+      <PageHeader
+        title={`Edit ${found.length} ${found.length === 1 ? cfg.singular.toLowerCase() : cfg.title.toLowerCase()}`}
+        subtitle={rows.length ? rows.slice(0, 8).map((r) => r.name).join(", ") + (rows.length > 8 ? `, and ${rows.length - 8} more` : "") : undefined}
+        back={{ href: `/${entity}`, label: cfg.title }}
+      />
+      {found.length === 0 ? (
+        <Empty>
+          Nothing selected. <Link className="text-brand-600 underline" href={`/${entity}`}>Go back and tick some rows</Link>.
+        </Empty>
+      ) : (
+        <BulkEditForm entity={entity} count={found.length} action={bulkUpdateMaster.bind(null, entity, found)} suppliers={suppliers} />
+      )}
     </>
   );
 }

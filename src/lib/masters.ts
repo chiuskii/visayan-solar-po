@@ -20,11 +20,14 @@ export const MASTERS: Record<
     columns: { name: string; label: string; money?: boolean }[];
     /** Offers CSV export / import (bulk edit) on the list page. */
     csv?: boolean;
+    /** Row checkboxes on the list page, with "Edit selected" / "Delete selected". */
+    bulk?: boolean;
   }
 > = {
   clients: {
     title: "Clients",
     singular: "Client",
+    csv: true,
     fields: [
       { name: "name", label: "Client / company name", required: true, wide: true },
       { name: "contactPerson", label: "Contact person" },
@@ -44,6 +47,7 @@ export const MASTERS: Record<
     title: "Suppliers",
     singular: "Supplier",
     csv: true,
+    bulk: true,
     fields: [
       { name: "name", label: "Supplier name", required: true, wide: true },
       { name: "contactPerson", label: "Contact person" },
@@ -65,6 +69,7 @@ export const MASTERS: Record<
     title: "Materials",
     singular: "Material",
     csv: true,
+    bulk: true,
     fields: [
       { name: "name", label: "Material name", required: true, wide: true, placeholder: "e.g. Solar panel, mono PERC" },
       { name: "spec", label: "Brand / spec", placeholder: "e.g. 550W" },
