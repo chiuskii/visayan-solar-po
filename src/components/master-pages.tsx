@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { importMasterCsv } from "@/app/actions/master-csv";
 import { deleteMaster } from "@/app/actions/masters";
 import { query, queryOne } from "@/db";
 import { cols } from "@/db/types";
 import { requireUser } from "@/lib/auth";
 import { peso } from "@/lib/format";
-import { MASTERS, type MasterKey } from "@/lib/masters";
+import { csvColumn, MASTERS, type MasterKey } from "@/lib/masters";
 import { ConfirmButton } from "./client-ui";
+import { ImportForm } from "./import-form";
 import { MasterForm } from "./master-form";
 import { Empty, PageHeader } from "./ui";
 
@@ -32,7 +34,17 @@ export async function MasterListPage({ entity, q }: { entity: MasterKey; q?: str
       <PageHeader
         title={cfg.title}
         subtitle={`${rows.length} ${rows.length === 1 ? cfg.singular.toLowerCase() : cfg.title.toLowerCase()}${search ? ` matching “${search}”` : ""}`}
-        actions={<Link href={`/${entity}/new`} className="btn btn-primary">+ New {cfg.singular.toLowerCase()}</Link>}
+        actions={
+          <>
+            {cfg.csv && (
+              <>
+                <a href={`/${entity}/export`} className="btn">Export CSV</a>
+                <Link href={`/${entity}/import`} className="btn">Import CSV</Link>
+              </>
+            )}
+            <Link href={`/${entity}/new`} className="btn btn-primary">+ New {cfg.singular.toLowerCase()}</Link>
+          </>
+        }
       />
       <form className="mb-4 flex max-w-md gap-2">
         <input className="input" name="q" defaultValue={search} placeholder={`Search ${cfg.title.toLowerCase()} by name`} />
@@ -121,6 +133,53 @@ export async function MasterEditPage({ entity, id, error }: { entity: MasterKey;
         </p>
       )}
       <MasterForm entity={entity} id={numId} initial={row} suppliers={suppliers} />
+    </>
+  );
+}
+
+export async function MasterImportPage({ entity }: { entity: MasterKey }) {
+  await requireUser();
+  const cfg = MASTERS[entity];
+  if (!cfg.csv) notFound();
+  const noun = cfg.title.toLowerCase();
+  const required = cfg.fields.filter((f) => f.required).map(csvColumn);
+  return (
+    <>
+      <PageHeader title={`Import ${noun}`} subtitle="Add or bulk-edit from a spreadsheet." back={{ href: `/${entity}`, label: cfg.title }} />
+      <div className="mb-6 grid gap-4 lg:grid-cols-[2fr_1fr]">
+        <section className="card space-y-2 p-5 text-sm text-slate-700">
+          <h2 className="mb-1">How it works</h2>
+          <ol className="list-decimal space-y-1 pl-5">
+            <li>
+              <a href={`/${entity}/export`} className="text-brand-600 underline">Export the current list</a> (or the{" "}
+              <a href={`/${entity}/export?template=1`} className="text-brand-600 underline">blank template</a>) and open it in Excel or Google Sheets.
+            </li>
+            <li>Edit cells, or add new rows with the <code>id</code> left blank. Save as CSV.</li>
+            <li>Upload it here. <b>Check file</b> shows what will change; <b>Import</b> saves it.</li>
+          </ol>
+          <ul className="list-disc space-y-1 pl-5 text-slate-600">
+            <li>Rows with an <code>id</code> update that {cfg.singular.toLowerCase()}; rows without one are added as new.</li>
+            <li>You can leave out columns you don’t want to change — e.g. just <code>id</code> and <code>default_cost</code> to update prices.</li>
+            {cfg.fields.some((f) => f.type === "supplier") && (
+              <li><code>default_supplier</code> is the supplier’s name, exactly as it appears under Suppliers. Leave blank for none.</li>
+            )}
+            <li>Rows missing from the file are left alone — importing never deletes anything.</li>
+            <li>If any row has a problem, nothing is saved, and each problem is listed by row number.</li>
+          </ul>
+        </section>
+        <section className="card p-5 text-sm">
+          <h2 className="mb-2">Columns</h2>
+          <ul className="space-y-0.5">
+            <li><code>id</code> <span className="text-slate-500">— blank for new</span></li>
+            {cfg.fields.map((f) => (
+              <li key={f.name}>
+                <code>{csvColumn(f)}</code> <span className="text-slate-500">— {f.label}{required.includes(csvColumn(f)) ? " (required)" : ""}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
+      <ImportForm action={importMasterCsv.bind(null, entity)} listHref={`/${entity}`} noun={noun} />
     </>
   );
 }

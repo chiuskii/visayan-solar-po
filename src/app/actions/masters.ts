@@ -5,39 +5,19 @@ import { redirect } from "next/navigation";
 import { execute, query, queryOne } from "@/db";
 import { toRow, type Client, type Material, type Supplier } from "@/db/types";
 import { requireUser } from "@/lib/auth";
+import { readFields } from "@/lib/master-fields";
 import { MASTERS, type MasterKey } from "@/lib/masters";
 
 const TABLES = { clients: "clients", suppliers: "suppliers", materials: "materials" } as const;
 
 export type FormState = { error?: string };
 
-function readFields(entity: MasterKey, formData: FormData) {
-  const values: Record<string, string | number | null> = {};
-  for (const f of MASTERS[entity].fields) {
-    const raw = String(formData.get(f.name) ?? "").trim();
-    if (f.required && !raw) throw new Error(`${f.label} is required.`);
-    if (f.type === "supplier") {
-      const n = raw === "" ? null : Number(raw);
-      if (n !== null && !Number.isInteger(n)) throw new Error(`Choose a valid ${f.label.toLowerCase()}.`);
-      values[f.name] = n;
-    } else if (f.type === "number") {
-      const n = raw === "" ? 0 : Number(raw);
-      if (!Number.isFinite(n) || n < 0) throw new Error(`${f.label} must be a positive number.`);
-      values[f.name] = n;
-    } else {
-      if (raw.length > 2000) throw new Error(`${f.label} is too long.`);
-      values[f.name] = raw || null;
-    }
-  }
-  return values;
-}
-
 export async function saveMaster(entity: MasterKey, id: number | null, _prev: FormState, formData: FormData): Promise<FormState> {
   await requireUser();
   if (!(entity in TABLES)) return { error: "Unknown list." };
   let values;
   try {
-    values = readFields(entity, formData);
+    values = readFields(entity, (name) => String(formData.get(name) ?? ""));
   } catch (e) {
     return { error: (e as Error).message };
   }

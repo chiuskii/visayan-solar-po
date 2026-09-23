@@ -13,7 +13,14 @@ export type MasterKey = "clients" | "suppliers" | "materials";
 
 export const MASTERS: Record<
   MasterKey,
-  { title: string; singular: string; fields: FieldDef[]; columns: { name: string; label: string; money?: boolean }[] }
+  {
+    title: string;
+    singular: string;
+    fields: FieldDef[];
+    columns: { name: string; label: string; money?: boolean }[];
+    /** Offers CSV export / import (bulk edit) on the list page. */
+    csv?: boolean;
+  }
 > = {
   clients: {
     title: "Clients",
@@ -36,6 +43,7 @@ export const MASTERS: Record<
   suppliers: {
     title: "Suppliers",
     singular: "Supplier",
+    csv: true,
     fields: [
       { name: "name", label: "Supplier name", required: true, wide: true },
       { name: "contactPerson", label: "Contact person" },
@@ -56,6 +64,7 @@ export const MASTERS: Record<
   materials: {
     title: "Materials",
     singular: "Material",
+    csv: true,
     fields: [
       { name: "name", label: "Material name", required: true, wide: true, placeholder: "e.g. Solar panel, mono PERC" },
       { name: "spec", label: "Brand / spec", placeholder: "e.g. 550W" },
@@ -74,3 +83,9 @@ export const MASTERS: Record<
     ],
   },
 };
+
+/** CSV column name for a field: defaultCost → default_cost, defaultSupplierId → default_supplier (by name). */
+export function csvColumn(f: FieldDef) {
+  const snake = f.name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+  return f.type === "supplier" ? snake.replace(/_id$/, "") : snake;
+}
