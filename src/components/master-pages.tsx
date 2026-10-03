@@ -161,7 +161,7 @@ export async function MasterEditPage({ entity, id, error }: { entity: MasterKey;
       />
       {error === "in-use" && (
         <p className="error-box mb-4 max-w-3xl">
-          This {cfg.singular.toLowerCase()} is used on purchase orders, so it can’t be deleted.
+          This {cfg.singular.toLowerCase()} is {entity === "materials" ? "in the stock records" : "used on purchase orders"}, so it can’t be deleted.
         </p>
       )}
       <MasterForm entity={entity} id={numId} initial={row} suppliers={suppliers} />
@@ -193,7 +193,10 @@ export async function MasterImportPage({ entity }: { entity: MasterKey }) {
             <li>Rows with an <code>id</code> update that {cfg.singular.toLowerCase()}; rows without one are added as new.</li>
             <li>You can leave out columns you don’t want to change — e.g. just <code>id</code> and <code>default_cost</code> to update prices.</li>
             {cfg.fields.some((f) => f.type === "supplier") && (
-              <li><code>default_supplier</code> is the supplier’s name, exactly as it appears under Suppliers. Leave blank for none.</li>
+              <li>
+                <code>default_supplier</code> is the supplier’s name as it appears under Suppliers (capitals don’t matter). Leave blank for none,
+                or tick “Add suppliers that aren’t in the list yet” to create new ones from the file.
+              </li>
             )}
             <li>Rows missing from the file are left alone — importing never deletes anything.</li>
             <li>If any row has a problem, nothing is saved, and each problem is listed by row number.</li>
@@ -211,7 +214,12 @@ export async function MasterImportPage({ entity }: { entity: MasterKey }) {
           </ul>
         </section>
       </div>
-      <ImportForm action={importMasterCsv.bind(null, entity)} listHref={`/${entity}`} noun={noun} />
+      <ImportForm
+        action={importMasterCsv.bind(null, entity)}
+        listHref={`/${entity}`}
+        noun={noun}
+        hasSupplierField={cfg.fields.some((f) => f.type === "supplier")}
+      />
     </>
   );
 }

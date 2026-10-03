@@ -9,8 +9,8 @@ export default async function EditUserPage({ params }: { params: Promise<{ id: s
   await requireAdmin();
   const id = Number((await params).id);
   if (!Number.isInteger(id)) notFound();
-  const u = await queryOne<Pick<User, "name" | "email" | "role" | "active">>(
-    "SELECT name, email, role, active FROM users WHERE id = ?",
+  const u = await queryOne<Pick<User, "name" | "designation" | "email" | "role" | "canApprove" | "active">>(
+    "SELECT name, designation, email, role, can_approve AS canApprove, active FROM users WHERE id = ?",
     [id],
   );
   if (!u) notFound();

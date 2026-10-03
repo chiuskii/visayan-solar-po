@@ -37,14 +37,27 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
              FROM po_items x JOIN suppliers s ON s.id = x.supplier_id WHERE x.po_id = po.id) AS supplierName
      FROM purchase_orders po
      JOIN clients c ON c.id = po.client_id
-     WHERE po.status IN ('DRAFT', 'ORDERED', 'PARTIAL')
+     WHERE po.status IN ('DRAFT', 'PENDING', 'ORDERED', 'PARTIAL')
      ORDER BY po.expected_date IS NULL, po.expected_date, po.id DESC
      LIMIT 15`,
   );
 
+  const lowStock = await queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM (
+       SELECT m.id FROM materials m LEFT JOIN stock_movements sm ON sm.material_id = m.id
+       WHERE m.reorder_level > 0 GROUP BY m.id HAVING COALESCE(SUM(sm.quantity), 0) <= MAX(m.reorder_level)
+     ) low`,
+  );
+
+  // POs waiting for this user to approve (approvers can't approve their own).
+  const toApprove = user.canApprove
+    ? await queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM purchase_orders WHERE status = 'PENDING' AND (created_by_id IS NULL OR created_by_id <> ?)", [user.id])
+    : null;
+
   const today = todayPH();
   const tiles = [
     { label: "Drafts", value: count("DRAFT"), href: "/pos?status=DRAFT" },
+    { label: "For approval", value: count("PENDING"), href: "/pos?status=PENDING" },
     { label: "Awaiting delivery", value: count("ORDERED"), href: "/pos?status=ORDERED" },
     { label: "Partially delivered", value: count("PARTIAL"), href: "/pos?status=PARTIAL" },
     { label: "Delivered", value: count("DELIVERED"), href: "/pos?status=DELIVERED" },
@@ -58,7 +71,19 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         actions={<Link href="/pos/new" className="btn btn-primary">+ New PO</Link>}
       />
       {denied && <p className="error-box mb-4">That page is for admins only.</p>}
-      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-5">
+      {Number(toApprove?.n) > 0 && (
+        <Link href="/pos?status=PENDING" className="mb-4 flex items-center justify-between rounded-md border border-violet-300 bg-violet-50 px-4 py-2.5 text-sm text-violet-900 hover:border-violet-400">
+          <span><b>{Number(toApprove?.n)}</b> {Number(toApprove?.n) === 1 ? "PO is" : "POs are"} waiting for your approval.</span>
+          <span className="underline">Review</span>
+        </Link>
+      )}
+      {Number(lowStock?.n) > 0 && (
+        <Link href="/inventory?show=low" className="mb-4 flex items-center justify-between rounded-md border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900 hover:border-amber-400">
+          <span><b>{Number(lowStock?.n)}</b> {Number(lowStock?.n) === 1 ? "material is" : "materials are"} at or below the reorder level.</span>
+          <span className="underline">View stock</span>
+        </Link>
+      )}
+      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
         {tiles.map((t) => (
           <Link key={t.label} href={t.href} className="card p-4 hover:border-brand-600">
             <div className="text-xs text-slate-500">{t.label}</div>

@@ -18,5 +18,6 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/health).*)"],
+  // Static files the login page needs (logo, icons) are served without signing in.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|logo.png|api/health).*)"],
 };

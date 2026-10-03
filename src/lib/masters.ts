@@ -77,6 +77,7 @@ export const MASTERS: Record<
       { name: "unit", label: "Unit", required: true, placeholder: "pcs, set, m, roll" },
       { name: "defaultCost", label: "Default unit cost (₱)", type: "number" },
       { name: "defaultSupplierId", label: "Default supplier", type: "supplier" },
+      { name: "reorderLevel", label: "Reorder level (low-stock alert)", type: "number", placeholder: "0 = no alert" },
     ],
     columns: [
       { name: "name", label: "Material" },

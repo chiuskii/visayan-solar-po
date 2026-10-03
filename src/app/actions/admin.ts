@@ -7,13 +7,20 @@ import { z } from "zod";
 import { execute, queryOne } from "@/db";
 import { toRow } from "@/db/types";
 import { requireAdmin, requireUser } from "@/lib/auth";
+import { readSignature } from "@/lib/signature";
 
 export type FormState = { error?: string; ok?: string };
 
 const userSchema = z.object({
   name: z.string().trim().min(1, "Enter a name.").max(120),
+  designation: z
+    .string()
+    .trim()
+    .max(120)
+    .transform((v) => v || null),
   email: z.string().trim().toLowerCase().email("Enter a valid email."),
   role: z.enum(["ADMIN", "STAFF"]),
+  canApprove: z.boolean(),
   active: z.boolean(),
   password: z.string().max(200),
 });
@@ -22,8 +29,10 @@ export async function saveUser(id: number | null, _prev: FormState, formData: Fo
   const me = await requireAdmin();
   const parsed = userSchema.safeParse({
     name: formData.get("name") ?? "",
+    designation: formData.get("designation") ?? "",
     email: formData.get("email") ?? "",
     role: formData.get("role") ?? "STAFF",
+    canApprove: formData.get("canApprove") === "on",
     active: formData.get("active") === "on",
     password: formData.get("password") ?? "",
   });
@@ -77,11 +86,21 @@ export async function saveSettings(_prev: FormState, formData: FormData): Promis
     poPrefix: poPrefix || "VS-PO",
     defaultTerms: s("defaultTerms", 190),
     poFooter: s("poFooter", 2000),
-    approverName: s("approverName", 120),
-    approverTitle: s("approverTitle", 120),
+    requireApproval: formData.get("requireApproval") === "on",
+    showSignatures: formData.get("showSignatures") === "on",
   };
   const row = toRow("company_settings", values);
   await execute("INSERT INTO company_settings SET id = 1, ? ON DUPLICATE KEY UPDATE ?", [row, row]);
   revalidatePath("/settings");
   return { ok: "Settings saved." };
+}
+
+/** Saves (or removes) the signed-in user's e-signature, printed as "Prepared by" on their POs. */
+export async function saveMySignature(_prev: FormState, formData: FormData): Promise<FormState> {
+  const me = await requireUser();
+  const sig = readSignature(formData.get("signature"));
+  if ("error" in sig) return { error: sig.error };
+  await execute("UPDATE users SET signature = ? WHERE id = ?", [sig.value, me.id]);
+  revalidatePath("/account");
+  return { ok: sig.value ? "Signature saved." : "Signature removed." };
 }

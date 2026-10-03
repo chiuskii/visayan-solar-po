@@ -4,15 +4,24 @@ import { cols, type Client, type Delivery, type PoItem, type PurchaseOrder, type
 import { computeTotals, receivedByItem, round2, totalsBySupplier } from "./po";
 
 export async function getPoDetail(id: number) {
-  const po = await queryOne<PurchaseOrder & { createdByName: string | null }>(
-    `SELECT ${cols("purchase_orders", "po")}, u.name AS createdByName
+  const po = await queryOne<
+    PurchaseOrder & {
+      createdByName: string | null;
+      createdByDesignation: string | null;
+      approvedByName: string | null;
+      approvedByDesignation: string | null;
+    }
+  >(
+    `SELECT ${cols("purchase_orders", "po")}, u.name AS createdByName, u.designation AS createdByDesignation,
+            a.name AS approvedByName, a.designation AS approvedByDesignation
      FROM purchase_orders po
      LEFT JOIN users u ON u.id = po.created_by_id
+     LEFT JOIN users a ON a.id = po.approved_by_id
      WHERE po.id = ?`,
     [id],
   );
   if (!po) return null;
-  const { createdByName, ...poRow } = po;
+  const { createdByName, createdByDesignation, approvedByName, approvedByDesignation, ...poRow } = po;
   const client = await queryOne<Client>(`SELECT ${cols("clients")} FROM clients WHERE id = ?`, [po.clientId]);
   if (!client) return null;
 
@@ -61,6 +70,9 @@ export async function getPoDetail(id: number) {
     po: poRow,
     client,
     createdByName,
+    createdByDesignation,
+    approvedByName,
+    approvedByDesignation,
     items: itemsWithBalance,
     totals: computeTotals(items, poRow.discount, poRow.vatRate),
     /** One entry per supplier on this PO, with that supplier's lines and share of the totals. */

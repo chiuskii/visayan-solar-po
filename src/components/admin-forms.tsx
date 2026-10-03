@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useRef } from "react";
-import { changeMyPassword, saveSettings, saveUser, type FormState } from "@/app/actions/admin";
+import { changeMyPassword, saveMySignature, saveSettings, saveUser, type FormState } from "@/app/actions/admin";
+import type { CompanySettings } from "@/db/types";
 import { useFormAction } from "./client-ui";
+import { SignaturePad } from "./signature-pad";
 
 function Msg({ state }: { state: FormState }) {
   if (state.error) return <p className="error-box">{state.error}</p>;
@@ -11,7 +13,13 @@ function Msg({ state }: { state: FormState }) {
   return null;
 }
 
-export function UserForm({ id, initial }: { id: number | null; initial?: { name: string; email: string; role: string; active: boolean } }) {
+export function UserForm({
+  id,
+  initial,
+}: {
+  id: number | null;
+  initial?: { name: string; designation: string | null; email: string; role: string; canApprove: boolean; active: boolean };
+}) {
   const [state, onSubmit, pending] = useFormAction<FormState>(saveUser.bind(null, id), {});
   return (
     <form onSubmit={onSubmit} className="card max-w-xl space-y-4 p-5">
@@ -19,6 +27,11 @@ export function UserForm({ id, initial }: { id: number | null; initial?: { name:
         <div className="sm:col-span-2">
           <label className="label" htmlFor="name">Full name *</label>
           <input className="input" id="name" name="name" defaultValue={initial?.name} required />
+        </div>
+        <div className="sm:col-span-2">
+          <label className="label" htmlFor="designation">Designation</label>
+          <input className="input" id="designation" name="designation" defaultValue={initial?.designation ?? ""} maxLength={120} placeholder="e.g. Purchasing Officer, General Manager" />
+          <p className="mt-1 text-xs text-slate-500">Printed under the name on POs (Prepared by / Approved by).</p>
         </div>
         <div className="sm:col-span-2">
           <label className="label" htmlFor="email">Email (used to sign in) *</label>
@@ -36,6 +49,12 @@ export function UserForm({ id, initial }: { id: number | null; initial?: { name:
             <input type="checkbox" name="active" defaultChecked={initial?.active ?? true} /> Account active
           </label>
         </div>
+        <label className="flex items-start gap-2 text-sm sm:col-span-2">
+          <input type="checkbox" name="canApprove" defaultChecked={initial?.canApprove ?? false} className="mt-0.5" />
+          <span>
+            <b>Approver</b> — can review and approve POs submitted by others, signing them with their e-signature.
+          </span>
+        </label>
         <div className="sm:col-span-2">
           <label className="label" htmlFor="password">{id ? "New password (leave blank to keep current)" : "Password *"}</label>
           <input className="input" id="password" name="password" type="password" autoComplete="new-password" minLength={8} required={!id} />
@@ -76,11 +95,12 @@ export function PasswordForm() {
   );
 }
 
-type Settings = Record<string, string | null>;
+type Settings = Omit<CompanySettings, "id" | "updatedAt">;
 
 export function SettingsForm({ initial }: { initial: Settings }) {
   const [state, onSubmit, pending] = useFormAction<FormState>(saveSettings, {});
-  const field = (name: string, label: string, opts: { area?: boolean; wide?: boolean; hint?: string } = {}) => (
+  type TextKey = Exclude<keyof Settings, "showSignatures" | "requireApproval">;
+  const field = (name: TextKey, label: string, opts: { area?: boolean; wide?: boolean; hint?: string } = {}) => (
     <div className={opts.wide ? "sm:col-span-2" : ""}>
       <label className="label" htmlFor={name}>{label}</label>
       {opts.area ? (
@@ -102,12 +122,32 @@ export function SettingsForm({ initial }: { initial: Settings }) {
         {field("poPrefix", "PO number prefix", { hint: "e.g. VS-PO gives VS-PO-2026-0001" })}
         {field("defaultTerms", "Default payment terms")}
         <div />
-        {field("approverName", "Approver name (printed on PO)")}
-        {field("approverTitle", "Approver title")}
+        <label className="flex items-start gap-2 text-sm sm:col-span-2">
+          <input type="checkbox" name="requireApproval" defaultChecked={initial.requireApproval} className="mt-0.5" />
+          <span>
+            <b>Require approval before a PO is ordered.</b> POs are submitted to an approver (set under Users), who reviews and signs them.
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-sm sm:col-span-2">
+          <input type="checkbox" name="showSignatures" defaultChecked={initial.showSignatures} className="mt-0.5" />
+          <span>Show e-signatures on printed POs by default (can still be switched off on each print)</span>
+        </label>
         {field("poFooter", "PO footer note", { area: true, wide: true })}
       </div>
       <Msg state={state} />
       <button className="btn btn-primary" disabled={pending}>{pending ? "Saving…" : "Save settings"}</button>
+    </form>
+  );
+}
+
+export function SignatureForm({ initial }: { initial: string | null }) {
+  const [state, onSubmit, pending] = useFormAction<FormState>(saveMySignature, {});
+  return (
+    <form onSubmit={onSubmit} className="card max-w-md space-y-4 p-5">
+      <SignaturePad name="signature" initial={initial} label="My e-signature" />
+      <p className="text-xs text-slate-500">Printed above “Prepared by” on purchase orders you create.</p>
+      <Msg state={state} />
+      <button className="btn btn-primary" disabled={pending}>{pending ? "Saving…" : "Save signature"}</button>
     </form>
   );
 }

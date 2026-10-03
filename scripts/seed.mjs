@@ -51,8 +51,9 @@ if (Number(n) === 0) {
 }
 
 await conn.query(
-  `INSERT IGNORE INTO company_settings (id, company_name, po_prefix, default_terms, po_footer)
-   VALUES (1, 'Visayan Solar', 'VS-PO', '30 days', 'Please indicate the PO number on your delivery receipt and invoice.')`,
+  `INSERT IGNORE INTO company_settings (id, company_name, address, po_prefix, default_terms, po_footer)
+   VALUES (1, 'Visayan Solar Ventures Corporation', '2nd Floor AVL Bldg., F. Llamas St.\nBasak San Nicolas, Cebu 6000',
+           'VS-PO', '30 days', 'Please indicate the PO number on your delivery receipt and invoice.')`,
 );
 
 await conn.end();

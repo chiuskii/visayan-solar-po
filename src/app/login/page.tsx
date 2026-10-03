@@ -8,8 +8,9 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
       <div className="card w-full max-w-sm p-6">
+        <img src="/logo.png" alt="Visayan Solar — Powering a brighter Visayas" className="mx-auto mb-4 h-36 w-auto" />
         <div className="mb-6">
-          <div className="text-xs font-semibold tracking-widest text-brand-600 uppercase">Visayan Solar</div>
+          <div className="text-xs font-semibold tracking-widest text-brand-600 uppercase">Visayan Solar Ventures Corporation</div>
           <h1 className="mt-1">Purchase Orders</h1>
           <p className="mt-1 text-sm text-slate-500">Sign in to continue.</p>
         </div>

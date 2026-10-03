@@ -6,7 +6,7 @@ import { queryOne } from "@/db";
 import type { User } from "@/db/types";
 import { SESSION_COOKIE, SESSION_DAYS, signSession, verifySession } from "./session-token";
 
-export type CurrentUser = { id: number; name: string; email: string; role: "ADMIN" | "STAFF" };
+export type CurrentUser = { id: number; name: string; email: string; role: "ADMIN" | "STAFF"; canApprove: boolean };
 
 export async function createSession(user: CurrentUser) {
   const token = await signSession({ userId: user.id, role: user.role, name: user.name });
@@ -28,12 +28,12 @@ export async function destroySession() {
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const session = await verifySession((await cookies()).get(SESSION_COOKIE)?.value);
   if (!session) return null;
-  const row = await queryOne<Pick<User, "id" | "name" | "email" | "role" | "active">>(
-    "SELECT id, name, email, role, active FROM users WHERE id = ?",
+  const row = await queryOne<Pick<User, "id" | "name" | "email" | "role" | "canApprove" | "active">>(
+    "SELECT id, name, email, role, can_approve AS canApprove, active FROM users WHERE id = ?",
     [session.userId],
   );
   if (!row || !row.active) return null;
-  return { id: row.id, name: row.name, email: row.email, role: row.role };
+  return { id: row.id, name: row.name, email: row.email, role: row.role, canApprove: row.canApprove };
 });
 
 export async function requireUser() {

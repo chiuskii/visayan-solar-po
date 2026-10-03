@@ -3,6 +3,7 @@ import { STATUS_LABEL } from "@/lib/format";
 
 const STATUS_STYLE: Record<string, string> = {
   DRAFT: "bg-slate-100 text-slate-700",
+  PENDING: "bg-violet-50 text-violet-700",
   ORDERED: "bg-blue-50 text-blue-700",
   PARTIAL: "bg-amber-50 text-amber-800",
   DELIVERED: "bg-emerald-50 text-emerald-700",

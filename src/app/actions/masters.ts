@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { execute, query, queryOne } from "@/db";
 import { toRow, type Client, type Material, type Supplier } from "@/db/types";
 import { requireUser } from "@/lib/auth";
+import { listBundles } from "@/lib/bundles";
 import { readFields } from "@/lib/master-fields";
 import { MASTERS, type MasterKey } from "@/lib/masters";
 
@@ -13,13 +14,14 @@ const TABLES = { clients: "clients", suppliers: "suppliers", materials: "materia
 export type FormState = { error?: string };
 export type BulkDeleteResult = { deleted: number; skipped: string[] };
 
-/** Ids (of the given ones) that are used on purchase orders and so can’t be deleted. */
+/** Ids (of the given ones) that can’t be deleted: used on purchase orders, or (materials) with stock history. */
 async function idsInUse(entity: MasterKey, ids: number[]) {
-  if (entity === "materials" || ids.length === 0) return new Set<number>();
-  const sql =
-    entity === "clients"
-      ? "SELECT DISTINCT client_id AS id FROM purchase_orders WHERE client_id IN (?)"
-      : "SELECT DISTINCT supplier_id AS id FROM po_items WHERE supplier_id IN (?)";
+  if (ids.length === 0) return new Set<number>();
+  const sql = {
+    clients: "SELECT DISTINCT client_id AS id FROM purchase_orders WHERE client_id IN (?)",
+    suppliers: "SELECT DISTINCT supplier_id AS id FROM po_items WHERE supplier_id IN (?)",
+    materials: "SELECT DISTINCT material_id AS id FROM stock_movements WHERE material_id IN (?)",
+  }[entity];
   return new Set((await query<{ id: number }>(sql, [ids])).map((r) => r.id));
 }
 
@@ -60,7 +62,7 @@ export async function deleteMaster(entity: MasterKey, id: number, _formData: For
   redirect(`/${entity}`);
 }
 
-/** Deletes the selected records, skipping any that are used on purchase orders. */
+/** Deletes the selected records, skipping any that are in use (see idsInUse). */
 export async function bulkDeleteMaster(entity: MasterKey, rawIds: number[]): Promise<BulkDeleteResult> {
   await requireUser();
   const table = TABLES[entity];
@@ -109,12 +111,20 @@ export async function bulkUpdateMaster(entity: MasterKey, rawIds: number[], _pre
 
 export async function listForPicker() {
   await requireUser();
-  const [c, s, m] = await Promise.all([
+  const [c, s, m, b] = await Promise.all([
     query<Pick<Client, "id" | "name" | "address">>("SELECT id, name, address FROM clients ORDER BY name"),
     query<Pick<Supplier, "id" | "name" | "paymentTerms">>("SELECT id, name, payment_terms AS paymentTerms FROM suppliers ORDER BY name"),
     query<Pick<Material, "id" | "name" | "spec" | "unit" | "defaultCost" | "defaultSupplierId">>(
       "SELECT id, name, spec, unit, default_cost AS defaultCost, default_supplier_id AS defaultSupplierId FROM materials ORDER BY name, spec",
     ),
+    listBundles(),
   ]);
-  return { clients: c, suppliers: s, materials: m };
+  const bundles = b.map(({ id, name, items }) => ({
+    id,
+    name,
+    items: items.map(({ supplierId, materialId, description, spec, unit, quantity, unitCost }) => ({
+      supplierId, materialId, description, spec, unit, quantity, unitCost,
+    })),
+  }));
+  return { clients: c, suppliers: s, materials: m, bundles };
 }

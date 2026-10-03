@@ -3,16 +3,22 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useFormAction } from "./client-ui";
+import { blankLine, isBlankLine, lineAmount, LineItemsTable, linesJson, newKey, r2, type Line, type MaterialOpt } from "./line-items";
 import type { FormState } from "@/app/actions/pos";
 import { peso } from "@/lib/format";
 
 type Option = { id: number; name: string };
 type ClientOpt = Option & { address: string | null };
 type SupplierOpt = Option & { paymentTerms: string | null };
-type MaterialOpt = { id: number; name: string; spec: string | null; unit: string; defaultCost: number; defaultSupplierId: number | null };
+export type BundleOpt = {
+  id: number;
+  name: string;
+  items: { supplierId: number | null; materialId: number | null; description: string; spec: string | null; unit: string; quantity: number; unitCost: number }[];
+};
 
 export type PoFormValues = {
   clientId: number | "";
+  toWarehouse: boolean;
   poDate: string;
   expectedDate: string;
   deliveryAddress: string;
@@ -23,50 +29,30 @@ export type PoFormValues = {
   items: Line[];
 };
 
-type Line = {
-  key: string;
-  id?: number;
-  supplierId: number | "";
-  materialId: number | null;
-  description: string;
-  spec: string;
-  unit: string;
-  quantity: string;
-  unitCost: string;
-  received?: number;
-};
-
-let keySeq = 0;
-const newKey = () => `n${++keySeq}`;
-export const blankLine = (supplierId: number | "" = ""): Line => ({
-  key: newKey(),
-  supplierId,
-  materialId: null,
-  description: "",
-  spec: "",
-  unit: "pcs",
-  quantity: "",
-  unitCost: "",
-});
-
-const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-
 export function PoForm({
   action,
   initial,
   clients,
   suppliers,
   materials,
+  bundles,
   isEdit,
   cancelHref,
+  requireApproval = false,
+  approvalNotice,
 }: {
   action: (prev: FormState, fd: FormData) => Promise<FormState>;
   initial: PoFormValues;
   clients: ClientOpt[];
   suppliers: SupplierOpt[];
   materials: MaterialOpt[];
+  bundles: BundleOpt[];
   isEdit: boolean;
   cancelHref: string;
+  /** "Save & submit for approval" instead of "Save & mark as ordered". */
+  requireApproval?: boolean;
+  /** Shown above the save buttons, e.g. that saving withdraws the approval. */
+  approvalNotice?: string;
 }) {
   const [state, onSubmit, pending] = useFormAction<FormState>(action, {});
   const [lines, setLines] = useState<Line[]>(initial.items.length ? initial.items : [blankLine()]);
@@ -77,7 +63,7 @@ export function PoForm({
   const [discount, setDiscount] = useState(initial.discount ? String(initial.discount) : "");
 
   const totals = useMemo(() => {
-    const subtotal = r2(lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unitCost) || 0), 0));
+    const subtotal = r2(lines.reduce((s, l) => s + lineAmount(l), 0));
     const net = r2(Math.max(0, subtotal - (Number(discount) || 0)));
     const vat = r2((net * (Number(vatRate) || 0)) / 100);
     return { subtotal, net, vat, total: r2(net + vat) };
@@ -88,36 +74,41 @@ export function PoForm({
     const map = new Map<number, number>();
     for (const l of lines) {
       if (l.supplierId === "") continue;
-      map.set(l.supplierId, (map.get(l.supplierId) ?? 0) + (Number(l.quantity) || 0) * (Number(l.unitCost) || 0));
+      map.set(l.supplierId, (map.get(l.supplierId) ?? 0) + lineAmount(l));
     }
     return [...map.entries()].map(([id, amount]) => ({ name: suppliers.find((s) => s.id === id)?.name ?? "—", amount: r2(amount) }));
   }, [lines, suppliers]);
 
-  const update = (key: string, patch: Partial<Line>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
-
-  function pickMaterial(key: string, value: string) {
-    if (!value) return update(key, { materialId: null });
-    const m = materials.find((x) => x.id === Number(value));
-    if (!m) return;
-    setLines((ls) =>
-      ls.map((l) =>
-        l.key === key
-          ? {
-              ...l,
-              materialId: m.id,
-              description: m.name,
-              spec: m.spec ?? "",
-              unit: m.unit,
-              unitCost: m.defaultCost ? String(m.defaultCost) : "",
-              supplierId: m.defaultSupplierId ?? l.supplierId,
-            }
-          : l,
-      ),
-    );
-  }
-
   // New lines start with the previous line's supplier.
   const addLine = () => setLines((ls) => [...ls, blankLine(ls.at(-1)?.supplierId ?? "")]);
+
+  const [bundleId, setBundleId] = useState("");
+  const [bundleQty, setBundleQty] = useState("1");
+  const [bundleNote, setBundleNote] = useState("");
+  // Copies a bundle's lines onto the PO (quantities × the multiplier), replacing any empty rows.
+  function addBundle() {
+    const b = bundles.find((x) => x.id === Number(bundleId));
+    const mult = Number(bundleQty) || 1;
+    if (!b) return;
+    const added: Line[] = b.items.map((it) => ({
+      key: newKey(),
+      supplierId: it.supplierId ?? "",
+      materialId: it.materialId,
+      description: it.description,
+      spec: it.spec ?? "",
+      unit: it.unit,
+      quantity: String(r2(it.quantity * mult)),
+      unitCost: String(it.unitCost),
+    }));
+    setLines((ls) => [...ls.filter((l) => !isBlankLine(l)), ...added]);
+    const missing = added.filter((l) => l.supplierId === "").length;
+    setBundleNote(
+      `Added ${added.length} lines from “${b.name}”${mult !== 1 ? ` × ${mult}` : ""}.` +
+        (missing ? ` ${missing} ${missing === 1 ? "line needs" : "lines need"} a supplier.` : ""),
+    );
+    setBundleId("");
+    setBundleQty("1");
+  }
 
   function pickClient(value: string) {
     const id = value ? Number(value) : "";
@@ -126,20 +117,7 @@ export function PoForm({
     if (c?.address && !deliveryAddress) setDeliveryAddress(c.address);
   }
 
-  const itemsJson = JSON.stringify(
-    lines
-      .filter((l) => l.description.trim() || l.quantity || l.unitCost)
-      .map((l) => ({
-        id: l.id,
-        supplierId: l.supplierId === "" ? null : l.supplierId,
-        materialId: l.materialId,
-        description: l.description,
-        spec: l.spec,
-        unit: l.unit,
-        quantity: Number(l.quantity),
-        unitCost: Number(l.unitCost || 0),
-      })),
-  );
+  const itemsJson = linesJson(lines);
 
   return (
     <form onSubmit={onSubmit} className="space-y-6">
@@ -170,6 +148,12 @@ export function PoForm({
           <label className="label" htmlFor="terms">Payment terms</label>
           <input id="terms" name="terms" className="input" value={terms} onChange={(e) => setTerms(e.target.value)} placeholder="Blank = each supplier’s own terms" />
         </div>
+        <label className="flex items-start gap-2 text-sm sm:col-span-2 lg:col-span-4">
+          <input type="checkbox" name="toWarehouse" defaultChecked={initial.toWarehouse} className="mt-0.5" />
+          <span>
+            <b>Deliver to warehouse</b> — received quantities are added to Inventory stock. Leave unticked for direct-to-site deliveries.
+          </span>
+        </label>
         <div className="sm:col-span-2 lg:col-span-4">
           <label className="label" htmlFor="deliveryAddress">Deliver to</label>
           <textarea id="deliveryAddress" name="deliveryAddress" rows={2} className="input" value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} placeholder="Project site or warehouse address" />
@@ -179,80 +163,30 @@ export function PoForm({
       <section className="card overflow-x-auto">
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <h2>Materials</h2>
-          <button type="button" className="btn btn-sm" onClick={addLine}>+ Add line</button>
+          <div className="flex flex-wrap items-center gap-2">
+            {bundles.length > 0 && (
+              <>
+                <select className="input w-56" value={bundleId} onChange={(e) => setBundleId(e.target.value)} aria-label="Bundle">
+                  <option value="">Add a bundle…</option>
+                  {bundles.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name} ({b.items.length} items)</option>
+                  ))}
+                </select>
+                <span className="text-sm text-slate-500">×</span>
+                <input className="input w-16 text-right" type="number" min={1} step="1" value={bundleQty} onChange={(e) => setBundleQty(e.target.value)} aria-label="How many of this bundle" />
+                <button type="button" className="btn btn-sm" onClick={addBundle} disabled={!bundleId}>Add bundle</button>
+              </>
+            )}
+            <button type="button" className="btn btn-sm" onClick={addLine}>+ Add line</button>
+          </div>
         </div>
+        {bundleNote && <p className="border-b border-slate-200 bg-brand-50 px-4 py-2 text-sm">{bundleNote}</p>}
         {suppliers.length === 0 && (
           <p className="border-b border-slate-200 px-4 py-2 text-xs text-slate-500">
             No suppliers yet — <Link className="text-brand-600 underline" href="/suppliers/new">add one</Link> before creating a PO.
           </p>
         )}
-        <table className="table min-w-[1080px]">
-          <thead>
-            <tr>
-              <th className="w-56">Pick from list</th>
-              <th className="w-48">Supplier *</th>
-              <th>Description *</th>
-              <th className="w-36">Brand / spec</th>
-              <th className="w-20">Unit</th>
-              <th className="num w-24">Qty</th>
-              <th className="num w-32">Unit cost (₱)</th>
-              <th className="num w-32">Amount</th>
-              <th className="w-10"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {lines.map((l) => {
-              const amount = (Number(l.quantity) || 0) * (Number(l.unitCost) || 0);
-              const locked = (l.received ?? 0) > 0;
-              return (
-                <tr key={l.key}>
-                  <td>
-                    <select className="input" value={l.materialId ?? ""} onChange={(e) => pickMaterial(l.key, e.target.value)} aria-label="Material">
-                      <option value="">— Custom item —</option>
-                      {materials.map((m) => (
-                        <option key={m.id} value={m.id}>{m.name}{m.spec ? ` (${m.spec})` : ""}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <select
-                      className="input"
-                      value={l.supplierId}
-                      onChange={(e) => update(l.key, { supplierId: e.target.value ? Number(e.target.value) : "" })}
-                      aria-label="Supplier"
-                    >
-                      <option value="">Choose…</option>
-                      {suppliers.map((s) => (
-                        <option key={s.id} value={s.id}>{s.name}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td><input className="input" value={l.description} onChange={(e) => update(l.key, { description: e.target.value })} aria-label="Description" /></td>
-                  <td><input className="input" value={l.spec} onChange={(e) => update(l.key, { spec: e.target.value })} aria-label="Spec" /></td>
-                  <td><input className="input" value={l.unit} onChange={(e) => update(l.key, { unit: e.target.value })} aria-label="Unit" /></td>
-                  <td>
-                    <input className="input text-right" type="number" min={locked ? l.received : 0} step="0.01" inputMode="decimal" value={l.quantity} onChange={(e) => update(l.key, { quantity: e.target.value })} aria-label="Quantity" />
-                    {locked && <div className="mt-0.5 text-right text-[11px] text-amber-700">{l.received} received</div>}
-                  </td>
-                  <td><input className="input text-right" type="number" min={0} step="0.01" inputMode="decimal" value={l.unitCost} onChange={(e) => update(l.key, { unitCost: e.target.value })} aria-label="Unit cost" /></td>
-                  <td className="num">{peso(amount)}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="rounded px-2 py-1 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
-                      onClick={() => setLines((ls) => (ls.length > 1 ? ls.filter((x) => x.key !== l.key) : [blankLine()]))}
-                      disabled={locked}
-                      title={locked ? "Has deliveries — can’t remove" : "Remove line"}
-                      aria-label="Remove line"
-                    >
-                      ×
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <LineItemsTable lines={lines} setLines={setLines} materials={materials} suppliers={suppliers} />
       </section>
 
       <section className="grid gap-6 lg:grid-cols-[1fr_360px]">
@@ -287,13 +221,14 @@ export function PoForm({
       </section>
 
       {state.error && <p className="error-box">{state.error}</p>}
+      {approvalNotice && <p className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900">{approvalNotice}</p>}
 
       <div className="flex flex-wrap gap-2">
         {isEdit ? (
           <button className="btn btn-primary" disabled={pending}>{pending ? "Saving…" : "Save changes"}</button>
         ) : (
           <>
-            <button className="btn btn-primary" name="intent" value="order" disabled={pending}>{pending ? "Saving…" : "Save & mark as ordered"}</button>
+            <button className="btn btn-primary" name="intent" value="order" disabled={pending}>{pending ? "Saving…" : requireApproval ? "Save & submit for approval" : "Save & mark as ordered"}</button>
             <button className="btn" name="intent" value="draft" disabled={pending}>Save as draft</button>
           </>
         )}

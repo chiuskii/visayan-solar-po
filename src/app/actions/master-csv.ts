@@ -16,7 +16,11 @@ export type ImportRow = { row: number; action: "create" | "update"; name: string
 export type ImportState = {
   error?: string;
   rowErrors?: { row: number; message: string }[];
-  summary?: { created: number; updated: number; unchanged: number };
+  /** Supplier names in the file that aren't in the Suppliers list (fixable with addSuppliers). */
+  missingSuppliers?: string[];
+  /** Ids in the file that don't exist (fixable with createMissing). */
+  missingIds?: number[];
+  summary?: { created: number; updated: number; unchanged: number; newSuppliers: number };
   /** Rows that would change (check) or did change (import), capped at MAX_LISTED. */
   rows?: ImportRow[];
   applied?: boolean;
@@ -30,12 +34,16 @@ const same = (a: unknown, b: unknown) => (a === "" ? null : (a ?? null)) === (b 
  * Bulk create/update from a CSV. Rows with an `id` update that record (only the columns
  * present in the file); rows without one are added. Nothing is saved if any row is invalid.
  * intent=check only reports what would happen.
+ * Options: addSuppliers=on creates suppliers named in the file that don't exist yet;
+ * createMissing=on adds rows whose id isn't found as new records instead of rejecting them.
  */
 export async function importMasterCsv(entity: MasterKey, _prev: ImportState, formData: FormData): Promise<ImportState> {
   await requireUser();
   const cfg = MASTERS[entity];
   if (!cfg?.csv) return { error: "This list can’t be imported." };
   const apply = formData.get("intent") === "import";
+  const addSuppliers = formData.get("addSuppliers") === "on";
+  const createMissing = formData.get("createMissing") === "on";
 
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return { error: "Choose a CSV file first." };
@@ -106,6 +114,14 @@ export async function importMasterCsv(entity: MasterKey, _prev: ImportState, for
     byIdentity.set(identity(r), r.id as number);
   }
 
+  // Suppliers to create (addSuppliers): lower-cased name → { placeholder id (negative), name as written }.
+  const newSuppliers = new Map<string, { tempId: number; name: string }>();
+  const missingSuppliers = new Map<string, string>();
+  const missingIds: number[] = [];
+
+  const supplierLabel = (sid: number) =>
+    sid < 0 ? `${[...newSuppliers.values()].find((n) => n.tempId === sid)?.name} (new supplier)` : supplierName.get(sid);
+
   const rowErrors: { row: number; message: string }[] = [];
   const seenIds = new Set<number>();
   const creates: { row: number; values: Record<string, unknown> }[] = [];
@@ -116,9 +132,20 @@ export async function importMasterCsv(entity: MasterKey, _prev: ImportState, for
   for (const { row, cells } of lines) {
     try {
       const rawId = cell(cells, "id")?.trim();
-      const id = rawId ? Number(rawId) : null;
+      let id = rawId ? Number(rawId) : null;
+      const notes: string[] = [];
       if (rawId && !(Number.isInteger(id) && id! > 0)) throw new Error(`“${rawId}” isn’t a valid id. Leave id blank to add a new ${cfg.singular.toLowerCase()}.`);
-      if (id && !existing.has(id)) throw new Error(`No ${cfg.singular.toLowerCase()} with id ${id}. Leave id blank to add a new one.`);
+      // An unknown id is reported after the rest of the row is checked, so its supplier names are
+      // collected too and one re-check with both options fixes everything.
+      let idError: string | null = null;
+      if (id && !existing.has(id)) {
+        if (createMissing) notes.push(`id ${id} wasn’t found, so this is added as new.`);
+        else {
+          missingIds.push(id);
+          idError = `No ${cfg.singular.toLowerCase()} with id ${id}. Leave id blank to add a new one.`;
+        }
+        id = null;
+      }
       if (id && seenIds.has(id)) throw new Error(`id ${id} appears more than once in the file.`);
       if (id) seenIds.add(id);
 
@@ -127,12 +154,21 @@ export async function importMasterCsv(entity: MasterKey, _prev: ImportState, for
         if (v === undefined) return id ? undefined : ""; // missing column: leave as-is on update, blank on create
         const f = cfg.fields.find((x) => x.name === name);
         if (f?.type !== "supplier" || !v.trim()) return v;
-        const matches = suppliersByName.get(v.trim().toLowerCase()) ?? [];
-        if (matches.length === 0) throw new Error(`No supplier named “${v.trim()}”. Add it under Suppliers first, or fix the spelling.`);
+        const key = v.trim().toLowerCase();
+        const matches = suppliersByName.get(key) ?? [];
+        if (matches.length === 0) {
+          if (!addSuppliers) {
+            if (!missingSuppliers.has(key)) missingSuppliers.set(key, v.trim());
+            throw new Error(`No supplier named “${v.trim()}”. Add it under Suppliers first, or fix the spelling.`);
+          }
+          if (!newSuppliers.has(key)) newSuppliers.set(key, { tempId: -(newSuppliers.size + 1), name: v.trim().slice(0, 190) });
+          return String(newSuppliers.get(key)!.tempId);
+        }
         if (matches.length > 1) throw new Error(`${matches.length} suppliers are named “${v.trim()}”. Rename one so they can be told apart.`);
         return String(matches[0].id);
       };
       const values = readFields(entity, get);
+      if (idError) throw new Error(idError);
 
       if (id) {
         const before = existing.get(id)!;
@@ -143,7 +179,7 @@ export async function importMasterCsv(entity: MasterKey, _prev: ImportState, for
         }
         const label = (k: string) => cfg.fields.find((f) => f.name === k)?.label ?? k;
         const fmt = (k: string, v: unknown) =>
-          cfg.fields.find((f) => f.name === k)?.type === "supplier" ? show(v == null ? null : supplierName.get(v as number)) : show(v);
+          cfg.fields.find((f) => f.name === k)?.type === "supplier" ? show(v == null ? null : supplierLabel(v as number)) : show(v);
         updates.push({ row, id, values: Object.fromEntries(changed) });
         listed.push({
           row,
@@ -154,33 +190,46 @@ export async function importMasterCsv(entity: MasterKey, _prev: ImportState, for
       } else {
         creates.push({ row, values });
         const dupe = byIdentity.get(identity(values));
-        listed.push({
-          row,
-          action: "create",
-          name: String(values.name),
-          changes: dupe ? [`⚠ Looks like existing id ${dupe}. Put ${dupe} in the id column to update it instead of adding a copy.`] : [],
-        });
+        if (dupe) notes.push(`⚠ Looks like existing id ${dupe}. Put ${dupe} in the id column to update it instead of adding a copy.`);
+        const sup = cfg.fields.find((f) => f.type === "supplier" && (values[f.name] as number) < 0);
+        if (sup) notes.push(`${sup.label}: ${supplierLabel(values[sup.name] as number)}`);
+        listed.push({ row, action: "create", name: String(values.name), changes: notes });
       }
     } catch (e) {
       rowErrors.push({ row, message: (e as Error).message });
     }
   }
 
-  const summary = { created: creates.length, updated: updates.length, unchanged };
+  const summary = { created: creates.length, updated: updates.length, unchanged, newSuppliers: newSuppliers.size };
   if (rowErrors.length) {
     return {
       error: `${rowErrors.length} row${rowErrors.length > 1 ? "s have" : " has"} problems. Nothing was imported — fix ${rowErrors.length > 1 ? "them" : "it"} and try again.`,
       rowErrors: rowErrors.slice(0, MAX_LISTED),
+      missingSuppliers: [...missingSuppliers.values()],
+      missingIds,
     };
   }
-  if (!apply || (creates.length === 0 && updates.length === 0)) {
+  if (!apply || (creates.length === 0 && updates.length === 0 && newSuppliers.size === 0)) {
     return { summary, rows: listed.slice(0, MAX_LISTED) };
   }
 
   await transaction(async (conn) => {
-    for (const u of updates) await execute(`UPDATE ${entity} SET ? WHERE id = ?`, [toRow(entity, u.values), u.id], conn);
-    for (const c of creates) await execute(`INSERT INTO ${entity} SET ?`, [toRow(entity, c.values)], conn);
+    // Create the new suppliers first, then swap their placeholder ids for the real ones.
+    const realId = new Map<number, number>();
+    for (const n of newSuppliers.values()) {
+      realId.set(n.tempId, (await execute("INSERT INTO suppliers SET name = ?", [n.name], conn)).insertId);
+    }
+    const resolve = (values: Record<string, unknown>) => {
+      for (const f of cfg.fields) {
+        const v = values[f.name];
+        if (f.type === "supplier" && typeof v === "number" && v < 0) values[f.name] = realId.get(v);
+      }
+      return values;
+    };
+    for (const u of updates) await execute(`UPDATE ${entity} SET ? WHERE id = ?`, [toRow(entity, resolve(u.values)), u.id], conn);
+    for (const c of creates) await execute(`INSERT INTO ${entity} SET ?`, [toRow(entity, resolve(c.values))], conn);
   });
+  if (newSuppliers.size) revalidatePath("/suppliers");
   revalidatePath(`/${entity}`);
   return { summary, rows: listed.slice(0, MAX_LISTED), applied: true };
 }

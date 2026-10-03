@@ -6,7 +6,8 @@ import { z } from "zod";
 import { execute, query, queryOne, transaction } from "@/db";
 import { toRow, type PoItem, type PoStatus } from "@/db/types";
 import { requireAdmin, requireUser } from "@/lib/auth";
-import { nextPoNumber, poHasDeliveries, receivedByItem, refreshDeliveryStatus, round2 } from "@/lib/po";
+import { assertNoNegativeStock, NegativeStockError, syncPoStock } from "@/lib/inventory";
+import { getSettings, nextPoNumber, poHasDeliveries, receivedByItem, refreshDeliveryStatus, round2 } from "@/lib/po";
 
 export type FormState = { error?: string };
 
@@ -64,6 +65,7 @@ function parsePoForm(formData: FormData) {
   return {
     data: {
       ...d,
+      toWarehouse: formData.get("toWarehouse") === "on",
       discount: round2(d.discount),
       items: d.items.map((it, i) => ({
         ...it,
@@ -91,7 +93,10 @@ export async function createPo(_prev: FormState, formData: FormData): Promise<Fo
   const { items, ...header } = parsed.data;
   const supplierError = await checkSuppliers(items);
   if (supplierError) return { error: supplierError };
-  const status = formData.get("intent") === "order" ? "ORDERED" : "DRAFT";
+  // "order" submits it: straight to ORDERED, or to PENDING when approval is required.
+  const { requireApproval } = await getSettings();
+  const submit = formData.get("intent") === "order";
+  const status = !submit ? "DRAFT" : requireApproval ? "PENDING" : "ORDERED";
 
   let newId = 0;
   for (let attempt = 0; attempt < 3 && !newId; attempt++) {
@@ -100,7 +105,7 @@ export async function createPo(_prev: FormState, formData: FormData): Promise<Fo
         const poNumber = await nextPoNumber(header.poDate);
         const res = await execute(
           "INSERT INTO purchase_orders SET ?",
-          [toRow("purchase_orders", { ...header, poNumber, status, createdById: user.id })],
+          [toRow("purchase_orders", { ...header, poNumber, status, createdById: user.id, submittedAt: submit ? new Date() : null })],
           conn,
         );
         const poId = res.insertId;
@@ -126,9 +131,15 @@ export async function updatePo(poId: number, _prev: FormState, formData: FormDat
   const supplierError = await checkSuppliers(items);
   if (supplierError) return { error: supplierError };
 
-  const po = await queryOne<{ status: PoStatus }>("SELECT status FROM purchase_orders WHERE id = ?", [poId]);
+  const po = await queryOne<{ status: PoStatus; approvedById: number | null }>(
+    "SELECT status, approved_by_id AS approvedById FROM purchase_orders WHERE id = ?",
+    [poId],
+  );
   if (!po) return { error: "This PO no longer exists." };
   if (po.status === "CANCELLED") return { error: "Reopen this PO before editing it." };
+  // Changing an approved PO withdraws the approval: it goes back to the approver.
+  const { requireApproval } = await getSettings();
+  const needsReapproval = requireApproval && po.approvedById !== null;
 
   const existing = await query<{ id: number }>("SELECT id FROM po_items WHERE po_id = ?", [poId]);
   const existingIds = new Set(existing.map((e) => e.id));
@@ -142,29 +153,94 @@ export async function updatePo(poId: number, _prev: FormState, formData: FormDat
     if (it.quantity < qty) return { error: `“${it.description}” already has ${qty} received. Quantity can’t be lower than that.` };
   }
 
-  await transaction(async (conn) => {
-    await execute("UPDATE purchase_orders SET ? WHERE id = ?", [toRow("purchase_orders", header), poId], conn);
-    const toDelete = [...existingIds].filter((id) => !keptIds.has(id));
-    if (toDelete.length) await execute("DELETE FROM po_items WHERE po_id = ? AND id IN (?)", [poId, toDelete], conn);
-    for (const { id, ...it } of items) {
-      if (id && existingIds.has(id)) {
-        await execute("UPDATE po_items SET ? WHERE id = ? AND po_id = ?", [toRow("po_items", it), id, poId], conn);
-      } else {
-        await execute("INSERT INTO po_items SET ?", [toRow("po_items", { ...it, poId })], conn);
+  // Materials whose stock this edit can change: those on the PO before and after.
+  const touched = await query<{ id: number }>(
+    "SELECT DISTINCT material_id AS id FROM po_items WHERE po_id = ? AND material_id IS NOT NULL",
+    [poId],
+  );
+  const stockIds = [...new Set([...touched.map((t) => t.id), ...items.map((i) => i.materialId).filter((v): v is number => !!v)])];
+  try {
+    await transaction(async (conn) => {
+      await execute("UPDATE purchase_orders SET ? WHERE id = ?", [toRow("purchase_orders", header), poId], conn);
+      if (needsReapproval) {
+        await execute(
+          "UPDATE purchase_orders SET status = 'PENDING', approved_by_id = NULL, approved_at = NULL, submitted_at = NOW() WHERE id = ?",
+          [poId],
+          conn,
+        );
       }
-    }
-  });
+      const toDelete = [...existingIds].filter((id) => !keptIds.has(id));
+      if (toDelete.length) await execute("DELETE FROM po_items WHERE po_id = ? AND id IN (?)", [poId, toDelete], conn);
+      for (const { id, ...it } of items) {
+        if (id && existingIds.has(id)) {
+          await execute("UPDATE po_items SET ? WHERE id = ? AND po_id = ?", [toRow("po_items", it), id, poId], conn);
+        } else {
+          await execute("INSERT INTO po_items SET ?", [toRow("po_items", { ...it, poId })], conn);
+        }
+      }
+      await syncPoStock(poId, conn);
+      await assertNoNegativeStock(stockIds, conn);
+    });
+  } catch (e) {
+    if (e instanceof NegativeStockError) return { error: e.message };
+    throw e;
+  }
   await refreshDeliveryStatus(poId);
   revalidatePath("/pos");
   revalidatePath(`/pos/${poId}`);
+  revalidatePath("/inventory");
   redirect(`/pos/${poId}`);
 }
 
-export async function markOrdered(poId: number, _fd: FormData) {
+/** Sends a draft on: to the approver (PENDING) when approval is required, otherwise straight to ORDERED. */
+export async function submitPo(poId: number, _fd: FormData) {
   await requireUser();
-  await execute("UPDATE purchase_orders SET status = 'ORDERED' WHERE id = ? AND status = 'DRAFT'", [poId]);
+  const { requireApproval } = await getSettings();
+  await execute("UPDATE purchase_orders SET status = ?, submitted_at = NOW(), approval_note = NULL WHERE id = ? AND status = 'DRAFT'", [
+    requireApproval ? "PENDING" : "ORDERED",
+    poId,
+  ]);
   await refreshDeliveryStatus(poId);
   revalidatePath(`/pos/${poId}`);
+  revalidatePath("/pos");
+}
+
+/** Approver signs off a PO waiting for approval: it becomes ORDERED with their name, designation and e-signature. */
+export async function approvePo(poId: number, _fd: FormData) {
+  const user = await requireUser();
+  if (!user.canApprove) redirect(`/pos/${poId}?error=not-approver`);
+  const po = await queryOne<{ status: PoStatus; createdById: number | null }>(
+    "SELECT status, created_by_id AS createdById FROM purchase_orders WHERE id = ?",
+    [poId],
+  );
+  if (!po || po.status !== "PENDING") redirect(`/pos/${poId}`);
+  if (po.createdById === user.id) redirect(`/pos/${poId}?error=own-po`);
+  const me = await queryOne<{ hasSignature: number }>("SELECT signature IS NOT NULL AS hasSignature FROM users WHERE id = ?", [user.id]);
+  if (!Number(me?.hasSignature)) redirect(`/pos/${poId}?error=no-signature`);
+  await execute(
+    "UPDATE purchase_orders SET status = 'ORDERED', approved_by_id = ?, approved_at = NOW(), approval_note = NULL WHERE id = ? AND status = 'PENDING'",
+    [user.id, poId],
+  );
+  await refreshDeliveryStatus(poId);
+  revalidatePath(`/pos/${poId}`);
+  revalidatePath("/pos");
+  redirect(`/pos/${poId}?saved=approved`);
+}
+
+/** Approver sends a PO back to draft with a note saying what to change. */
+export async function returnPo(poId: number, _prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  if (!user.canApprove) return { error: "Only approvers can return a PO." };
+  const note = String(formData.get("note") ?? "").trim().slice(0, 2000);
+  if (!note) return { error: "Say what needs to change, so the preparer knows what to fix." };
+  const res = await execute(
+    "UPDATE purchase_orders SET status = 'DRAFT', approval_note = ?, submitted_at = NULL WHERE id = ? AND status = 'PENDING'",
+    [`${note}\n— ${user.name}`, poId],
+  );
+  if (!res.affectedRows) return { error: "This PO is no longer waiting for approval." };
+  revalidatePath(`/pos/${poId}`);
+  revalidatePath("/pos");
+  redirect(`/pos/${poId}?saved=returned`);
 }
 
 export async function cancelPo(poId: number, _fd: FormData) {
@@ -176,10 +252,12 @@ export async function cancelPo(poId: number, _fd: FormData) {
 export async function reopenPo(poId: number, _fd: FormData) {
   await requireUser();
   const hasDeliveries = await poHasDeliveries(poId);
-  await execute("UPDATE purchase_orders SET status = ? WHERE id = ? AND status = 'CANCELLED'", [
-    hasDeliveries ? "ORDERED" : "DRAFT",
-    poId,
-  ]);
+  // Without deliveries it goes back to draft and needs submitting (and approving) again.
+  await execute(
+    `UPDATE purchase_orders SET status = ?${hasDeliveries ? "" : ", approved_by_id = NULL, approved_at = NULL, submitted_at = NULL"}
+     WHERE id = ? AND status = 'CANCELLED'`,
+    [hasDeliveries ? "ORDERED" : "DRAFT", poId],
+  );
   await refreshDeliveryStatus(poId);
   revalidatePath(`/pos/${poId}`);
 }
@@ -196,7 +274,8 @@ export async function createDelivery(poId: number, _prev: FormState, formData: F
   const user = await requireUser();
   const po = await queryOne<{ status: PoStatus }>("SELECT status FROM purchase_orders WHERE id = ?", [poId]);
   if (!po) return { error: "This PO no longer exists." };
-  if (po.status === "DRAFT") return { error: "Mark this PO as ordered before recording deliveries." };
+  if (po.status === "DRAFT") return { error: "Submit this PO before recording deliveries." };
+  if (po.status === "PENDING") return { error: "This PO is waiting for approval. Deliveries can be recorded once it’s approved." };
   if (po.status === "CANCELLED") return { error: "This PO is cancelled." };
 
   const deliveryDate = String(formData.get("deliveryDate") ?? "");
@@ -234,16 +313,33 @@ export async function createDelivery(poId: number, _prev: FormState, formData: F
       [lines.map((l) => [res.insertId, l.poItemId, l.quantity])],
       conn,
     );
+    await syncPoStock(poId, conn);
   });
   await refreshDeliveryStatus(poId);
   revalidatePath(`/pos/${poId}`);
   revalidatePath("/pos");
+  revalidatePath("/inventory");
   redirect(`/pos/${poId}?saved=delivery`);
 }
 
 export async function deleteDelivery(poId: number, deliveryId: number, _fd: FormData) {
   await requireAdmin();
-  await execute("DELETE FROM deliveries WHERE id = ? AND po_id = ?", [deliveryId, poId]);
+  // Stock received by this delivery is removed with it (stock_movements.delivery_id cascades),
+  // unless some of it has already been issued.
+  const mats = await query<{ id: number }>(
+    "SELECT DISTINCT material_id AS id FROM stock_movements WHERE delivery_id = ?",
+    [deliveryId],
+  );
+  try {
+    await transaction(async (conn) => {
+      await execute("DELETE FROM deliveries WHERE id = ? AND po_id = ?", [deliveryId, poId], conn);
+      await assertNoNegativeStock(mats.map((m) => m.id), conn);
+    });
+  } catch (e) {
+    if (e instanceof NegativeStockError) redirect(`/pos/${poId}?error=stock-issued`);
+    throw e;
+  }
   await refreshDeliveryStatus(poId);
   revalidatePath(`/pos/${poId}`);
+  revalidatePath("/inventory");
 }

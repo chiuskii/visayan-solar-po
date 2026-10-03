@@ -18,6 +18,7 @@ export function todayPH() {
 
 export const STATUS_LABEL: Record<string, string> = {
   DRAFT: "Draft",
+  PENDING: "For approval",
   ORDERED: "Ordered",
   PARTIAL: "Partially delivered",
   DELIVERED: "Delivered",

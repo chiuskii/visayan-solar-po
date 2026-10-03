@@ -18,11 +18,14 @@ export default async function NewPoPage({ searchParams }: { searchParams: Promis
         action={createPo}
         isEdit={false}
         cancelHref="/pos"
+        requireApproval={settings.requireApproval}
         clients={opts.clients}
         suppliers={opts.suppliers}
         materials={opts.materials}
+        bundles={opts.bundles}
         initial={{
           clientId,
+          toWarehouse: false,
           poDate: todayPH(),
           expectedDate: "",
           deliveryAddress: opts.clients.find((c) => c.id === clientId)?.address ?? "",

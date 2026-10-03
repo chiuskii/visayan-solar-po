@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PrintButton } from "@/components/print-button";
+import { queryOne } from "@/db";
 import { requireUser } from "@/lib/auth";
 import { fmtDate, num, peso } from "@/lib/format";
 import { getSettings } from "@/lib/po";
@@ -11,19 +12,41 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   return { title: d ? d.po.poNumber : "PO" };
 }
 
-export default async function PrintPoPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function PrintPoPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ sig?: string }>;
+}) {
   await requireUser();
   const id = Number((await params).id);
+  const { sig } = await searchParams;
   if (!Number.isInteger(id)) notFound();
   const [detail, co] = await Promise.all([getPoDetail(id), getSettings()]);
   if (!detail) notFound();
   const { po, client, bySupplier } = detail;
+  // E-signatures: on by default per Settings, switchable per print with ?sig=0 / ?sig=1.
+  const showSig = sig === undefined ? co.showSignatures : sig === "1";
+  const signatureOf = async (userId: number | null) =>
+    showSig && userId
+      ? ((await queryOne<{ signature: string | null }>("SELECT signature FROM users WHERE id = ?", [userId]))?.signature ?? null)
+      : null;
+  // Approval is cleared when an approved PO is edited, so approvedById means "approved as it stands".
+  const approved = po.approvedById !== null && po.status !== "DRAFT" && po.status !== "PENDING" && po.status !== "CANCELLED";
+  const [preparedSig, approverSig] = await Promise.all([signatureOf(po.createdById), approved ? signatureOf(po.approvedById) : null]);
+  const notApproved = po.status === "DRAFT" || po.status === "PENDING";
 
   return (
     <div className="min-h-screen bg-slate-100 py-6 print:bg-white print:py-0">
       <div className="mx-auto mb-4 flex max-w-[210mm] justify-between px-4 print:hidden">
         <Link href={`/pos/${id}`} className="btn">← Back to PO</Link>
-        <PrintButton />
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href={`/pos/${id}/print?sig=${showSig ? 0 : 1}`} className="btn" replace>
+            {showSig ? "Hide e-signatures" : "Show e-signatures"}
+          </Link>
+          <PrintButton />
+        </div>
       </div>
       {bySupplier.length > 1 && (
         <p className="mx-auto mb-4 max-w-[210mm] px-4 text-sm text-slate-600 print:hidden">
@@ -36,13 +59,16 @@ export default async function PrintPoPage({ params }: { params: Promise<{ id: st
           className={`mx-auto mb-6 max-w-[210mm] bg-white p-10 text-[13px] leading-snug text-slate-900 shadow print:mb-0 print:max-w-none print:p-0 print:shadow-none ${page < bySupplier.length - 1 ? "break-after-page" : ""}`}
         >
           <header className="flex items-start justify-between gap-6 border-b-2 border-brand-600 pb-4">
-            <div>
-              <div className="text-xl font-bold text-brand-700">{co.companyName}</div>
-              {co.address && <div className="whitespace-pre-line text-slate-600">{co.address}</div>}
-              <div className="text-slate-600">
-                {[co.phone, co.email].filter(Boolean).join(" · ")}
+            <div className="flex items-start gap-4">
+              <img src="/logo.png" alt="" className="h-20 w-auto shrink-0" />
+              <div>
+                <div className="text-xl font-bold text-brand-700">{co.companyName}</div>
+                {co.address && <div className="whitespace-pre-line text-slate-600">{co.address}</div>}
+                <div className="text-slate-600">
+                  {[co.phone, co.email].filter(Boolean).join(" · ")}
+                </div>
+                {co.tin && <div className="text-slate-600">TIN: {co.tin}</div>}
               </div>
-              {co.tin && <div className="text-slate-600">TIN: {co.tin}</div>}
             </div>
             <div className="text-right">
               <div className="text-2xl font-bold tracking-wide">PURCHASE ORDER</div>
@@ -53,6 +79,9 @@ export default async function PrintPoPage({ params }: { params: Promise<{ id: st
                   {po.expectedDate && <tr><td className="pr-3 text-slate-500">Deliver by</td><td>{fmtDate(po.expectedDate)}</td></tr>}
                   {(po.terms || supplier.paymentTerms) && <tr><td className="pr-3 text-slate-500">Terms</td><td>{po.terms || supplier.paymentTerms}</td></tr>}
                   {bySupplier.length > 1 && <tr><td className="pr-3 text-slate-500">Page</td><td>{page + 1} of {bySupplier.length}</td></tr>}
+                  {notApproved && (
+                    <tr><td colSpan={2} className="font-bold text-amber-600">{po.status === "PENDING" ? "FOR APPROVAL — NOT YET APPROVED" : "DRAFT — NOT YET APPROVED"}</td></tr>
+                  )}
                   {po.status === "CANCELLED" && <tr><td colSpan={2} className="font-bold text-red-600">CANCELLED</td></tr>}
                 </tbody>
               </table>
@@ -120,22 +149,39 @@ export default async function PrintPoPage({ params }: { params: Promise<{ id: st
           )}
           {co.poFooter && <p className="mt-4 text-slate-600">{co.poFooter}</p>}
 
-          <section className="mt-14 grid grid-cols-3 gap-8 text-center">
+          <section className="mt-8 grid grid-cols-3 gap-8 text-center">
             <div>
+              <SignatureSpace src={preparedSig} />
               <div className="min-h-6 border-t border-slate-800 pt-1 font-medium">{detail.createdByName ?? "\u00a0"}</div>
+              {detail.createdByDesignation && <div className="text-slate-600">{detail.createdByDesignation}</div>}
               <div className="text-slate-500">Prepared by</div>
             </div>
             <div>
-              <div className="min-h-6 border-t border-slate-800 pt-1 font-medium">{co.approverName || "\u00a0"}</div>
-              <div className="text-slate-500">Approved by{co.approverTitle ? ` · ${co.approverTitle}` : ""}</div>
+              <SignatureSpace src={approverSig} />
+              <div className="min-h-6 border-t border-slate-800 pt-1 font-medium">{approved ? detail.approvedByName : "\u00a0"}</div>
+              {approved && detail.approvedByDesignation && <div className="text-slate-600">{detail.approvedByDesignation}</div>}
+              <div className="text-slate-500">Approved by{approved && po.approvedAt ? ` · ${fmtDate(po.approvedAt)}` : ""}</div>
             </div>
             <div>
+              <SignatureSpace src={null} />
               <div className="min-h-6 border-t border-slate-800 pt-1 font-medium">&nbsp;</div>
               <div className="text-slate-500">Supplier conforme / date</div>
             </div>
           </section>
+          {notApproved && (
+            <p className="mt-3 text-center text-xs text-slate-400 print:hidden">The approver’s name and e-signature appear here once this PO is approved.</p>
+          )}
         </article>
       ))}
+    </div>
+  );
+}
+
+/** Space above a signature line, with the e-signature (if any) sitting on the line. */
+function SignatureSpace({ src }: { src: string | null }) {
+  return (
+    <div className="flex h-16 items-end justify-center">
+      {src && <img src={src} alt="Signature" className="-mb-2 max-h-16 max-w-[85%] object-contain" />}
     </div>
   );
 }

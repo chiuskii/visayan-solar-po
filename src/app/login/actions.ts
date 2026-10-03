@@ -18,7 +18,7 @@ export async function login(_prev: LoginState, formData: FormData): Promise<Logi
   const ok = user && user.active && (await bcrypt.compare(password, user.passwordHash));
   if (!ok) return { error: "Email or password is incorrect." };
 
-  await createSession({ id: user.id, name: user.name, email: user.email, role: user.role });
+  await createSession({ id: user.id, name: user.name, email: user.email, role: user.role, canApprove: user.canApprove });
   redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/");
 }
 

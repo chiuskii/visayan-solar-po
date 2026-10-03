@@ -69,7 +69,7 @@ export function BulkSelect({
           <span>
             Deleted {result.deleted} {result.deleted === 1 ? singular : plural}.
             {result.skipped.length > 0 &&
-              ` Kept ${result.skipped.length} that ${result.skipped.length === 1 ? "is" : "are"} used on purchase orders: ${result.skipped.join(", ")}.`}
+              ` Kept ${result.skipped.length} that ${result.skipped.length === 1 ? "is" : "are"} still in use (on purchase orders or in stock records): ${result.skipped.join(", ")}.`}
           </span>
           <button type="button" className="text-sm underline" onClick={() => setResult(null)}>Dismiss</button>
         </div>

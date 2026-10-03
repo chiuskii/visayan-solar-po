@@ -44,7 +44,7 @@ export async function getSettings(): Promise<CompanySettings> {
   return (
     row ?? {
       id: 1,
-      companyName: "Visayan Solar",
+      companyName: "Visayan Solar Ventures Corporation",
       address: null,
       phone: null,
       email: null,
@@ -52,8 +52,8 @@ export async function getSettings(): Promise<CompanySettings> {
       poPrefix: "VS-PO",
       defaultTerms: null,
       poFooter: null,
-      approverName: null,
-      approverTitle: null,
+      requireApproval: true,
+      showSignatures: true,
       updatedAt: "",
     }
   );
@@ -84,10 +84,10 @@ export async function receivedByItem(itemIds: number[]) {
   return map;
 }
 
-/** Sets ORDERED / PARTIAL / DELIVERED from what has been received. Leaves DRAFT and CANCELLED alone. */
+/** Sets ORDERED / PARTIAL / DELIVERED from what has been received. Leaves DRAFT, PENDING and CANCELLED alone. */
 export async function refreshDeliveryStatus(poId: number) {
   const po = await queryOne<{ status: PoStatus }>("SELECT status FROM purchase_orders WHERE id = ?", [poId]);
-  if (!po || po.status === "CANCELLED" || po.status === "DRAFT") return;
+  if (!po || po.status === "CANCELLED" || po.status === "DRAFT" || po.status === "PENDING") return;
   const items = await query<{ id: number; quantity: number }>("SELECT id, quantity FROM po_items WHERE po_id = ?", [poId]);
   const received = await receivedByItem(items.map((i) => i.id));
   const anyReceived = items.some((i) => (received.get(i.id) ?? 0) > 0);
