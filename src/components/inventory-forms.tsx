@@ -7,6 +7,7 @@ import { num } from "@/lib/format";
 import { useFormAction } from "./client-ui";
 
 export type StockOpt = { id: number; name: string; spec: string | null; unit: string; onHand: number };
+export type IssueBundleOpt = { id: number; name: string; items: { materialId: number | null; quantity: number }[] };
 
 const label = (m: StockOpt) => `${m.name}${m.spec ? ` (${m.spec})` : ""}`;
 
@@ -15,16 +16,57 @@ export function IssueForm({
   action,
   materials,
   clients,
+  bundles,
   today,
 }: {
   action: (prev: FormState, fd: FormData) => Promise<FormState>;
   materials: StockOpt[];
   clients: { id: number; name: string }[];
+  bundles: IssueBundleOpt[];
   today: string;
 }) {
   const [state, onSubmit, pending] = useFormAction<FormState>(action, {});
   const [lines, setLines] = useState([{ key: 1, materialId: "", quantity: "" }]);
-  const inStock = materials.filter((m) => m.onHand > 0);
+  const [bundleId, setBundleId] = useState("");
+  const [bundleQty, setBundleQty] = useState("1");
+  const [bundleNote, setBundleNote] = useState("");
+  // Choices: what's in stock, plus anything already on a line (e.g. added from a bundle while out of stock).
+  const chosen = new Set(lines.map((l) => Number(l.materialId)));
+  const choices = materials.filter((m) => m.onHand > 0 || chosen.has(m.id));
+  const anyInStock = materials.some((m) => m.onHand > 0);
+
+  // Adds a bundle's materials (× the multiplier), merging into lines that already have that material.
+  function addBundle() {
+    const b = bundles.find((x) => x.id === Number(bundleId));
+    if (!b) return;
+    const mult = Number(bundleQty) || 1;
+    const totals = new Map<number, number>();
+    for (const it of b.items) {
+      if (it.materialId && materials.some((m) => m.id === it.materialId)) {
+        totals.set(it.materialId, (totals.get(it.materialId) ?? 0) + it.quantity * mult);
+      }
+    }
+    const skipped = b.items.length - b.items.filter((it) => it.materialId && totals.has(it.materialId)).length;
+    setLines((ls) => {
+      const next = ls.filter((l) => l.materialId || l.quantity).map((l) => ({ ...l }));
+      let key = Math.max(0, ...ls.map((l) => l.key));
+      for (const [materialId, qty] of totals) {
+        const existing = next.find((l) => Number(l.materialId) === materialId);
+        const q = Math.round(qty * 100) / 100;
+        if (existing) existing.quantity = String(Math.round(((Number(existing.quantity) || 0) + q) * 100) / 100);
+        else next.push({ key: ++key, materialId: String(materialId), quantity: String(q) });
+      }
+      return next.length ? next : [{ key: key + 1, materialId: "", quantity: "" }];
+    });
+    const short = [...totals].filter(([id, qty]) => qty > (materials.find((m) => m.id === id)?.onHand ?? 0)).length;
+    setBundleNote(
+      `Added ${totals.size} materials from “${b.name}”${mult !== 1 ? ` × ${mult}` : ""}.` +
+        (short ? ` ${short} ${short === 1 ? "is" : "are"} short on stock (marked in red).` : "") +
+        (skipped ? ` ${skipped} custom ${skipped === 1 ? "line isn’t" : "lines aren’t"} tracked in stock and ${skipped === 1 ? "was" : "were"} skipped.` : ""),
+    );
+    setBundleId("");
+    setBundleQty("1");
+  }
   const update = (key: number, patch: Partial<(typeof lines)[number]>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const json = JSON.stringify(
     lines.filter((l) => l.materialId || l.quantity).map((l) => ({ materialId: Number(l.materialId) || 0, quantity: Number(l.quantity) || 0 })),
@@ -60,11 +102,27 @@ export function IssueForm({
       <section className="card overflow-x-auto">
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <h2>Materials to issue</h2>
-          <button type="button" className="btn btn-sm" onClick={() => setLines((ls) => [...ls, { key: Math.max(...ls.map((l) => l.key)) + 1, materialId: "", quantity: "" }])}>
-            + Add line
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {bundles.length > 0 && (
+              <>
+                <select className="input w-56" value={bundleId} onChange={(e) => setBundleId(e.target.value)} aria-label="Bundle">
+                  <option value="">Add a bundle…</option>
+                  {bundles.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name} ({b.items.length} items)</option>
+                  ))}
+                </select>
+                <span className="text-sm text-slate-500">×</span>
+                <input className="input w-16 text-right" type="number" min={1} step="1" value={bundleQty} onChange={(e) => setBundleQty(e.target.value)} aria-label="How many of this bundle" />
+                <button type="button" className="btn btn-sm" onClick={addBundle} disabled={!bundleId}>Add bundle</button>
+              </>
+            )}
+            <button type="button" className="btn btn-sm" onClick={() => setLines((ls) => [...ls, { key: Math.max(...ls.map((l) => l.key)) + 1, materialId: "", quantity: "" }])}>
+              + Add line
+            </button>
+          </div>
         </div>
-        {inStock.length === 0 ? (
+        {bundleNote && <p className="border-b border-slate-200 bg-brand-50 px-4 py-2 text-sm">{bundleNote}</p>}
+        {!anyInStock ? (
           <p className="px-4 py-6 text-sm text-slate-500">Nothing is in stock yet. Stock comes in from warehouse PO deliveries, or from an adjustment.</p>
         ) : (
           <table className="table min-w-[560px]">
@@ -80,7 +138,7 @@ export function IssueForm({
                     <td>
                       <select className="input" value={l.materialId} onChange={(e) => update(l.key, { materialId: e.target.value })} aria-label="Material">
                         <option value="">Choose…</option>
-                        {inStock.map((x) => (
+                        {choices.map((x) => (
                           <option key={x.id} value={x.id}>{label(x)}</option>
                         ))}
                       </select>
@@ -106,7 +164,7 @@ export function IssueForm({
 
       {state.error && <p className="error-box">{state.error}</p>}
       <div className="flex gap-2">
-        <button className="btn btn-primary" disabled={pending || inStock.length === 0}>{pending ? "Saving…" : "Issue materials"}</button>
+        <button className="btn btn-primary" disabled={pending || !anyInStock}>{pending ? "Saving…" : "Issue materials"}</button>
         <Link href="/inventory" className="btn">Cancel</Link>
       </div>
     </form>
