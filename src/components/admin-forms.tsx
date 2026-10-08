@@ -137,7 +137,7 @@ export function SettingsForm({ initial }: { initial: Settings }) {
         {field("poFooter", "PO footer note", { area: true, wide: true })}
         {field("reportRecipients", "Stock report recipients", {
           wide: true,
-          hint: "Email addresses that receive the stock report (Inventory → Stock report), separated by commas.",
+          hint: "Filled into the To field when you open Gmail from Inventory → Stock report. Separate addresses with commas.",
         })}
       </div>
       <Msg state={state} />

@@ -3,7 +3,6 @@ import { ReportForm } from "@/components/report-form";
 import { Empty, PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
 import { fmtDate, num, peso } from "@/lib/format";
-import { mailConfig } from "@/lib/mailer";
 import { getSettings } from "@/lib/po";
 import { gatherStockReport } from "@/lib/stock-report";
 
@@ -13,26 +12,21 @@ export default async function StockReportPage() {
   const user = await requireUser();
   const [data, settings] = await Promise.all([gatherStockReport(), getSettings()]);
   const ai = Boolean(process.env.ANTHROPIC_API_KEY);
-  const mail = mailConfig();
 
   return (
     <>
       <PageHeader
         title="Stock report"
-        subtitle="Email an update on current stock, low-stock items and what to reorder."
+        subtitle="Draft an update on current stock, low-stock items and what to reorder, then paste it into Gmail."
         back={{ href: "/inventory", label: "Inventory" }}
       />
       <div className="mb-6 grid gap-6 xl:grid-cols-[3fr_2fr]">
-        <ReportForm defaultTo={settings.reportRecipients ?? ""} canSend={Boolean(mail)} />
+        <ReportForm defaultTo={settings.reportRecipients ?? ""} />
         <section className="card space-y-3 p-5 text-sm">
           <h2>Setup</h2>
           <div className="flex items-center justify-between gap-2">
             <span>AI summary</span>
             {ai ? <span className="font-medium text-emerald-700">On</span> : <span className="text-amber-700">Off — standard summary used</span>}
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span>Email sending</span>
-            {mail ? <span className="font-medium text-emerald-700">From {mail.from}</span> : <span className="text-amber-700">Not set up</span>}
           </div>
           <div className="flex items-center justify-between gap-2">
             <span>Default recipients</span>
@@ -41,11 +35,9 @@ export default async function StockReportPage() {
               {user.role === "ADMIN" && <> · <Link href="/settings" className="text-brand-700 underline">Settings</Link></>}
             </span>
           </div>
-          {(!ai || !mail) && (
+          {!ai && (
             <p className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
-              An admin sets these in the server’s <code>.env</code> file, then restarts the app:{" "}
-              {!ai && <><code>ANTHROPIC_API_KEY</code> for the AI summary; </>}
-              {!mail && <><code>SMTP_HOST</code>, <code>SMTP_PORT</code>, <code>SMTP_USER</code>, <code>SMTP_PASS</code>, <code>SMTP_FROM</code> for sending.</>}
+              For an AI-written summary, an admin adds <code>ANTHROPIC_API_KEY</code> to the server’s <code>.env</code> file and restarts the app.
             </p>
           )}
         </section>

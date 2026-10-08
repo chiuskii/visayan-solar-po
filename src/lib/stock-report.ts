@@ -106,7 +106,7 @@ export async function gatherStockReport(): Promise<StockReportData> {
 
 const itemLabel = (i: ReportItem) => `${i.name}${i.spec ? ` (${i.spec})` : ""}`;
 
-/** The exact figures, as a plain-text table (appended to every email so numbers never depend on the AI). */
+/** The exact figures as plain text (for pasting where formatting is lost), so numbers never depend on the AI. */
 export function factsText(d: StockReportData) {
   const lines = [
     `Stock summary — ${fmtDate(d.date)}`,
@@ -130,12 +130,8 @@ export function factsText(d: StockReportData) {
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** HTML email: the written summary, then the exact figures as a table. */
-export function reportHtml(body: string, d: StockReportData) {
-  const paragraphs = esc(body)
-    .split(/\n{2,}/)
-    .map((p) => `<p style="margin:0 0 12px">${p.replace(/\n/g, "<br>")}</p>`)
-    .join("");
+/** The exact figures as HTML (totals line + "Needs attention" table) — pasted below the written summary. */
+export function reportTableHtml(d: StockReportData) {
   const td = "padding:6px 8px;border-bottom:1px solid #e2e8f0;text-align:left";
   const rows = d.attention
     .map(
@@ -151,19 +147,16 @@ export function reportHtml(body: string, d: StockReportData) {
   const th = "padding:6px 8px;text-align:left;background:#0f5c4a;color:#fff;font-weight:600";
   const table = d.attention.length
     ? `<h3 style="margin:20px 0 8px;font-size:15px">Needs attention</h3>
-       <table style="border-collapse:collapse;font-size:13px;width:100%">
+       <table style="border-collapse:collapse;font-size:13px">
          <tr><th style="${th}">Material</th><th style="${th}">Status</th><th style="${th}">On hand</th><th style="${th}">Reorder at</th>
              <th style="${th}">On order</th><th style="${th}">Suggested order</th><th style="${th}">Supplier</th><th style="${th}">Last price</th></tr>
          ${rows}
        </table>`
     : `<p style="margin:16px 0;color:#047857">Nothing is low or out of stock.</p>`;
-  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#0f172a;max-width:760px">
-    ${paragraphs}
-    <p style="margin:16px 0 4px;color:#475569">Materials in stock: ${d.totals.inStock} of ${d.totals.materials} · Stock value: ${peso(d.totals.stockValue)} ·
+  return `<p style="margin:16px 0 4px;color:#475569">Materials in stock: ${d.totals.inStock} of ${d.totals.materials} · Stock value: ${peso(d.totals.stockValue)} ·
       Out: ${d.totals.out} · Low: ${d.totals.low} · To reorder: ${d.totals.toReorder}</p>
     ${table}
-    <p style="margin:20px 0 0;font-size:12px;color:#94a3b8">Sent from the ${esc(d.companyName)} PO System · figures as of ${fmtDate(d.date)}</p>
-  </div>`;
+    <p style="margin:20px 0 0;font-size:12px;color:#94a3b8">From the ${esc(d.companyName)} PO System · figures as of ${fmtDate(d.date)}</p>`;
 }
 
 /** Written summary without AI (no API key, or the AI call failed). */
