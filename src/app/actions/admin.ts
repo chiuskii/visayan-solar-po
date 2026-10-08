@@ -8,6 +8,7 @@ import { execute, queryOne } from "@/db";
 import { toRow } from "@/db/types";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { readSignature } from "@/lib/signature";
+import { historyTotal, userHistory } from "@/lib/users";
 
 export type FormState = { error?: string; ok?: string };
 
@@ -38,14 +39,14 @@ export async function saveUser(id: number | null, _prev: FormState, formData: Fo
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message };
   const { password, ...data } = parsed.data;
+  // Passwords are set here for new users only; existing users use setUserPassword.
   if (!id && password.length < 8) return { error: "Password must be at least 8 characters." };
-  if (id && password && password.length < 8) return { error: "New password must be at least 8 characters." };
   if (id === me.id && (!data.active || data.role !== "ADMIN")) return { error: "You can’t remove your own admin access." };
 
   const dupe = await queryOne<{ id: number }>("SELECT id FROM users WHERE email = ? AND id <> ? LIMIT 1", [data.email, id ?? 0]);
   if (dupe) return { error: "Another user already has that email." };
 
-  const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
+  const passwordHash = !id ? await bcrypt.hash(password, 10) : undefined;
   if (id) {
     await execute("UPDATE users SET ? WHERE id = ?", [toRow("users", { ...data, passwordHash }), id]);
   } else {
@@ -53,6 +54,41 @@ export async function saveUser(id: number | null, _prev: FormState, formData: Fo
   }
   revalidatePath("/users");
   redirect("/users");
+}
+
+/** Admin removes a user's e-signature (e.g. it's wrong, or they've left). POs already approved keep showing who approved them. */
+export async function removeUserSignature(id: number, _fd: FormData) {
+  await requireAdmin();
+  await execute("UPDATE users SET signature = NULL WHERE id = ?", [id]);
+  revalidatePath(`/users/${id}`);
+  revalidatePath("/users");
+  redirect(`/users/${id}?saved=signature-removed`);
+}
+
+/** Admin sets a new password for a user (e.g. a forgotten password). */
+export async function setUserPassword(id: number, _prev: FormState, formData: FormData): Promise<FormState> {
+  await requireAdmin();
+  const next = String(formData.get("next") ?? "");
+  const confirm = String(formData.get("confirm") ?? "");
+  if (next.length < 8) return { error: "The new password must be at least 8 characters." };
+  if (next.length > 200) return { error: "That password is too long." };
+  if (next !== confirm) return { error: "The two passwords don’t match." };
+  const res = await execute("UPDATE users SET password_hash = ? WHERE id = ?", [await bcrypt.hash(next, 10), id]);
+  if (!res.affectedRows) return { error: "This user no longer exists." };
+  return { ok: "Password changed. Let the user know their new password." };
+}
+
+/**
+ * Removes a user who has no history. Users who prepared/approved POs or recorded deliveries or
+ * stock are kept (their names print on those POs) — disable them instead.
+ */
+export async function deleteUser(id: number, _fd: FormData) {
+  const me = await requireAdmin();
+  if (id === me.id) redirect(`/users/${id}?error=self`);
+  if (historyTotal(await userHistory(id)) > 0) redirect(`/users/${id}?error=has-history`);
+  await execute("DELETE FROM users WHERE id = ?", [id]);
+  revalidatePath("/users");
+  redirect("/users?removed=1");
 }
 
 export async function changeMyPassword(_prev: FormState, formData: FormData): Promise<FormState> {

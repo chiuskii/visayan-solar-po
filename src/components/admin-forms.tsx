@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef } from "react";
-import { changeMyPassword, saveMySignature, saveSettings, saveUser, type FormState } from "@/app/actions/admin";
+import { changeMyPassword, saveMySignature, saveSettings, saveUser, setUserPassword, type FormState } from "@/app/actions/admin";
 import type { CompanySettings } from "@/db/types";
 import { useFormAction } from "./client-ui";
 import { SignaturePad } from "./signature-pad";
@@ -55,10 +55,12 @@ export function UserForm({
             <b>Approver</b> — can review and approve POs submitted by others, signing them with their e-signature.
           </span>
         </label>
-        <div className="sm:col-span-2">
-          <label className="label" htmlFor="password">{id ? "New password (leave blank to keep current)" : "Password *"}</label>
-          <input className="input" id="password" name="password" type="password" autoComplete="new-password" minLength={8} required={!id} />
-        </div>
+        {!id && (
+          <div className="sm:col-span-2">
+            <label className="label" htmlFor="password">Password * (8+ characters)</label>
+            <input className="input" id="password" name="password" type="password" autoComplete="new-password" minLength={8} required />
+          </div>
+        )}
       </div>
       <Msg state={state} />
       <div className="flex gap-2">
@@ -148,6 +150,35 @@ export function SignatureForm({ initial }: { initial: string | null }) {
       <p className="text-xs text-slate-500">Printed above “Prepared by” on purchase orders you create.</p>
       <Msg state={state} />
       <button className="btn btn-primary" disabled={pending}>{pending ? "Saving…" : "Save signature"}</button>
+    </form>
+  );
+}
+
+/** Admin sets a new password for another user. */
+export function SetPasswordForm({ id, name }: { id: number; name: string }) {
+  const [state, onSubmit, pending] = useFormAction<FormState>(setUserPassword.bind(null, id), {});
+  const ref = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (state.ok) ref.current?.reset();
+  }, [state]);
+  return (
+    <form ref={ref} onSubmit={onSubmit} id="password" className="card max-w-xl scroll-mt-6 space-y-4 p-5">
+      <div>
+        <h2>Change password</h2>
+        <p className="text-sm text-slate-500">Sets a new password for {name}. They can change it later under My account.</p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor="next">New password (8+ characters)</label>
+          <input className="input" id="next" name="next" type="password" autoComplete="new-password" minLength={8} required />
+        </div>
+        <div>
+          <label className="label" htmlFor="confirm">Confirm new password</label>
+          <input className="input" id="confirm" name="confirm" type="password" autoComplete="new-password" minLength={8} required />
+        </div>
+      </div>
+      <Msg state={state} />
+      <button className="btn btn-primary" disabled={pending}>{pending ? "Saving…" : "Change password"}</button>
     </form>
   );
 }

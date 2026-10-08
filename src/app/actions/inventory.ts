@@ -131,6 +131,40 @@ export async function adjustStock(_prev: FormState, formData: FormData): Promise
   redirect(`/inventory/${materialId}?saved=adjust`);
 }
 
+/**
+ * Admin: clears the movement log but keeps stock. Every material's current on-hand quantity
+ * becomes one "Opening balance" adjustment; all other movements are deleted.
+ */
+export async function clearMovementLog(_fd: FormData) {
+  const user = await requireAdmin();
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila" }).format(new Date());
+  await transaction(async (conn) => {
+    // Lock the log so nothing is added while it's being replaced.
+    await query("SELECT id FROM stock_movements FOR UPDATE", [], conn);
+    const balances = await query<{ materialId: number; qty: number }>(
+      "SELECT material_id AS materialId, SUM(quantity) AS qty FROM stock_movements GROUP BY material_id HAVING SUM(quantity) <> 0",
+      [],
+      conn,
+    );
+    const lastDelivery = await queryOne<{ id: number | null }>("SELECT MAX(id) AS id FROM deliveries", [], conn);
+    await execute("DELETE FROM stock_movements", [], conn);
+    if (balances.length) {
+      await execute(
+        "INSERT INTO stock_movements (material_id, type, quantity, movement_date, reference, notes, created_by_id) VALUES ?",
+        [balances.map((b) => [b.materialId, "ADJUST", b.qty, today, "Opening balance", `Movement log cleared by ${user.name}`, user.id])],
+        conn,
+      );
+    }
+    await execute(
+      "UPDATE company_settings SET stock_cleared_delivery_id = GREATEST(stock_cleared_delivery_id, ?) WHERE id = 1",
+      [lastDelivery?.id ?? 0],
+      conn,
+    );
+  });
+  revalidatePath("/inventory");
+  redirect("/inventory?saved=cleared");
+}
+
 /** Removes a mistaken issue or adjustment. Receipts are removed by deleting the PO delivery instead. */
 export async function deleteMovement(id: number, materialId: number, _fd: FormData) {
   await requireAdmin();

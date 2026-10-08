@@ -163,6 +163,8 @@ export type CompanySettings = {
   /** POs must be approved before they're ordered. */
   requireApproval: boolean;
   showSignatures: boolean;
+  /** Deliveries up to this id are already in the opening balances from the last log clear. */
+  stockClearedDeliveryId: number;
   updatedAt: string;
 };
 
@@ -194,7 +196,8 @@ export const COLUMNS = {
   },
   company_settings: {
     id: "id", companyName: "company_name", address: "address", phone: "phone", email: "email", tin: "tin", poPrefix: "po_prefix",
-    defaultTerms: "default_terms", requireApproval: "require_approval", poFooter: "po_footer", showSignatures: "show_signatures", updatedAt: "updated_at",
+    defaultTerms: "default_terms", requireApproval: "require_approval", poFooter: "po_footer", showSignatures: "show_signatures",
+    stockClearedDeliveryId: "stock_cleared_delivery_id", updatedAt: "updated_at",
   },
 } as const;
 

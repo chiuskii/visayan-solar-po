@@ -40,13 +40,15 @@ export async function assertNoNegativeStock(materialIds: number[], conn: PoolCon
  * Rebuilds the stock receipts for a PO's deliveries: removes them, then — if the PO is
  * delivered to the warehouse — adds one RECEIVE movement per delivered line that is linked
  * to a material. Call after recording deliveries or editing the PO.
+ * Deliveries from before the last log clear are skipped: they're already in the opening balances.
  */
 export async function syncPoStock(poId: number, conn?: PoolConnection) {
   const c = conn ?? getPool();
   await execute(
     `DELETE sm FROM stock_movements sm
      JOIN deliveries d ON d.id = sm.delivery_id
-     WHERE d.po_id = ? AND sm.type = 'RECEIVE'`,
+     WHERE d.po_id = ? AND sm.type = 'RECEIVE'
+       AND d.id > (SELECT stock_cleared_delivery_id FROM company_settings WHERE id = 1)`,
     [poId],
     c,
   );
@@ -58,7 +60,8 @@ export async function syncPoStock(poId: number, conn?: PoolConnection) {
      JOIN deliveries d ON d.id = di.delivery_id
      JOIN po_items pi ON pi.id = di.po_item_id
      JOIN purchase_orders po ON po.id = d.po_id
-     WHERE d.po_id = ? AND po.to_warehouse = 1 AND pi.material_id IS NOT NULL`,
+     WHERE d.po_id = ? AND po.to_warehouse = 1 AND pi.material_id IS NOT NULL
+       AND d.id > (SELECT stock_cleared_delivery_id FROM company_settings WHERE id = 1)`,
     [poId],
     c,
   );
@@ -133,6 +136,11 @@ export async function materialLedger(materialId: number) {
   return withBalance.reverse();
 }
 
-export async function recentMovements(limit = 15) {
-  return query<MovementRow>(`${MOVEMENT_SELECT} ORDER BY sm.created_at DESC, sm.id DESC LIMIT ?`, [limit]);
+/** One page of all movements, newest first, plus the total count. */
+export async function recentMovements(page: number, perPage = 10) {
+  const [rows, total] = await Promise.all([
+    query<MovementRow>(`${MOVEMENT_SELECT} ORDER BY sm.created_at DESC, sm.id DESC LIMIT ? OFFSET ?`, [perPage, (page - 1) * perPage]),
+    query<{ n: number }>("SELECT COUNT(*) AS n FROM stock_movements"),
+  ]);
+  return { rows, total: Number(total[0]?.n ?? 0) };
 }

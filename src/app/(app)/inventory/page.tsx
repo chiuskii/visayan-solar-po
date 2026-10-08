@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { clearMovementLog } from "@/app/actions/inventory";
+import { ConfirmButton } from "@/components/client-ui";
 import { MovementType, StockBadge } from "@/components/stock-ui";
 import { Empty, PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
@@ -7,7 +9,8 @@ import { listStock, recentMovements } from "@/lib/inventory";
 
 export const metadata = { title: "Inventory" };
 
-type SP = { q?: string; show?: string; saved?: string };
+type SP = { q?: string; show?: string; saved?: string; mp?: string };
+const PER_PAGE = 10;
 const FILTERS = [
   { value: "all", label: "All materials" },
   { value: "stock", label: "In stock" },
@@ -15,11 +18,22 @@ const FILTERS = [
 ] as const;
 
 export default async function InventoryPage({ searchParams }: { searchParams: Promise<SP> }) {
-  await requireUser();
+  const user = await requireUser();
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
   const show = FILTERS.find((f) => f.value === sp.show)?.value ?? "all";
-  const [rows, recent] = await Promise.all([listStock(q, show), recentMovements(12)]);
+  const page = Math.max(1, Math.floor(Number(sp.mp)) || 1);
+  const [rows, recent] = await Promise.all([listStock(q, show), recentMovements(page, PER_PAGE)]);
+  const pages = Math.max(1, Math.ceil(recent.total / PER_PAGE));
+  // Links to another page of movements, keeping the stock filters.
+  const pageHref = (n: number) => {
+    const p = new URLSearchParams();
+    if (q) p.set("q", q);
+    if (show !== "all") p.set("show", show);
+    if (n > 1) p.set("mp", String(n));
+    const qs = p.toString();
+    return `/inventory${qs ? `?${qs}` : ""}#movements`;
+  };
   const value = rows.reduce((s, r) => s + Math.max(0, r.onHand) * r.defaultCost, 0);
 
   return (
@@ -35,6 +49,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
         }
       />
       {sp.saved === "issue" && <p className="ok-box mb-4">Materials issued.</p>}
+      {sp.saved === "cleared" && <p className="ok-box mb-4">Movement log cleared. Each material’s stock was kept as an opening balance.</p>}
       <form className="mb-4 flex flex-wrap gap-2">
         <input className="input max-w-xs" name="q" defaultValue={q} placeholder="Search material, spec or category" />
         <select className="input w-auto" name="show" defaultValue={show}>
@@ -79,15 +94,25 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
         )}
       </div>
 
-      <section className="card overflow-x-auto">
-        <div className="border-b border-slate-200 px-4 py-3"><h2>Recent movements</h2></div>
-        {recent.length === 0 ? (
+      <section id="movements" className="card scroll-mt-6 overflow-x-auto">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+          <h2>Recent movements</h2>
+          {user.role === "ADMIN" && recent.total > 0 && (
+            <ConfirmButton
+              action={clearMovementLog}
+              label="Clear log"
+              confirmLabel="Yes, clear the log (stock is kept)"
+              className="btn btn-sm btn-danger"
+            />
+          )}
+        </div>
+        {recent.rows.length === 0 ? (
           <Empty>No stock movements yet.</Empty>
         ) : (
           <table className="table min-w-[760px]">
             <thead><tr><th>Date</th><th>Type</th><th>Material</th><th className="num">Qty</th><th>Reference</th><th>By</th></tr></thead>
             <tbody>
-              {recent.map((m) => (
+              {recent.rows.map((m) => (
                 <tr key={m.id}>
                   <td className="whitespace-nowrap">{fmtDate(m.movementDate)}</td>
                   <td><MovementType type={m.type} /></td>
@@ -101,6 +126,18 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
               ))}
             </tbody>
           </table>
+        )}
+        {recent.total > PER_PAGE && (
+          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-2.5 text-sm">
+            <span className="text-slate-500">
+              Showing {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, recent.total)} of {recent.total}
+            </span>
+            <div className="flex items-center gap-2">
+              {page > 1 ? <Link href={pageHref(page - 1)} className="btn btn-sm">← Newer</Link> : <span className="btn btn-sm opacity-40">← Newer</span>}
+              <span className="text-slate-500">Page {Math.min(page, pages)} of {pages}</span>
+              {page < pages ? <Link href={pageHref(page + 1)} className="btn btn-sm">Older →</Link> : <span className="btn btn-sm opacity-40">Older →</span>}
+            </div>
+          </div>
         )}
       </section>
     </>
