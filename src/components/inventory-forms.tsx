@@ -18,12 +18,14 @@ export function IssueForm({
   clients,
   bundles,
   today,
+  initialClientId,
 }: {
   action: (prev: FormState, fd: FormData) => Promise<FormState>;
   materials: StockOpt[];
   clients: { id: number; name: string }[];
   bundles: IssueBundleOpt[];
   today: string;
+  initialClientId?: number;
 }) {
   const [state, onSubmit, pending] = useFormAction<FormState>(action, {});
   const [lines, setLines] = useState([{ key: 1, materialId: "", quantity: "" }]);
@@ -78,7 +80,7 @@ export function IssueForm({
       <section className="card grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
         <div className="sm:col-span-2">
           <label className="label" htmlFor="clientId">Client / project</label>
-          <select id="clientId" name="clientId" className="input" defaultValue="">
+          <select id="clientId" name="clientId" className="input" defaultValue={initialClientId ?? ""}>
             <option value="">— None (enter a reference) —</option>
             {clients.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
@@ -101,7 +103,7 @@ export function IssueForm({
 
       <section className="card overflow-x-auto">
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <h2>Materials to issue</h2>
+          <h2>Materials to assign</h2>
           <div className="flex flex-wrap items-center gap-2">
             {bundles.length > 0 && (
               <>
@@ -127,7 +129,7 @@ export function IssueForm({
         ) : (
           <table className="table min-w-[560px]">
             <thead>
-              <tr><th>Material</th><th className="num w-32">On hand</th><th className="num w-40">Issue qty</th><th className="w-10"></th></tr>
+              <tr><th>Material</th><th className="num w-32">On hand</th><th className="num w-40">Assign qty</th><th className="w-10"></th></tr>
             </thead>
             <tbody>
               {lines.map((l) => {
@@ -147,7 +149,7 @@ export function IssueForm({
                     <td>
                       <div className="flex items-center gap-1">
                         <input className={`input text-right ${over ? "border-red-500" : ""}`} type="number" min={0} step="0.01" inputMode="decimal" value={l.quantity} onChange={(e) => update(l.key, { quantity: e.target.value })} aria-label="Quantity" />
-                        {m && <button type="button" className="btn btn-sm" onClick={() => update(l.key, { quantity: String(m.onHand) })} title="Issue everything on hand">All</button>}
+                        {m && <button type="button" className="btn btn-sm" onClick={() => update(l.key, { quantity: String(m.onHand) })} title="Assign everything on hand">All</button>}
                       </div>
                       {over && <div className="mt-0.5 text-right text-[11px] text-red-600">More than on hand</div>}
                     </td>
@@ -164,7 +166,7 @@ export function IssueForm({
 
       {state.error && <p className="error-box">{state.error}</p>}
       <div className="flex gap-2">
-        <button className="btn btn-primary" disabled={pending || !anyInStock}>{pending ? "Saving…" : "Issue materials"}</button>
+        <button className="btn btn-primary" disabled={pending || !anyInStock}>{pending ? "Saving…" : "Assign materials"}</button>
         <Link href="/inventory" className="btn">Cancel</Link>
       </div>
     </form>

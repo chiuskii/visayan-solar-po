@@ -8,6 +8,7 @@ import { requireUser } from "@/lib/auth";
 import { peso } from "@/lib/format";
 import { csvColumn, MASTERS, type MasterKey } from "@/lib/masters";
 import { BulkEditForm } from "./bulk-edit-form";
+import { ClientMaterials } from "./client-materials";
 import { BulkSelect } from "./bulk-select";
 import { ConfirmButton } from "./client-ui";
 import { ImportForm } from "./import-form";
@@ -161,10 +162,13 @@ export async function MasterEditPage({ entity, id, error }: { entity: MasterKey;
       />
       {error === "in-use" && (
         <p className="error-box mb-4 max-w-3xl">
-          This {cfg.singular.toLowerCase()} is {entity === "materials" ? "in the stock records" : "used on purchase orders"}, so it can’t be deleted.
+          This {cfg.singular.toLowerCase()} is{" "}
+          {entity === "materials" ? "in the stock records" : entity === "clients" ? "on purchase orders or has materials assigned" : "used on purchase orders"}, so it
+          can’t be deleted.
         </p>
       )}
       <MasterForm entity={entity} id={numId} initial={row} suppliers={suppliers} />
+      {entity === "clients" && <ClientMaterials clientId={numId} />}
     </>
   );
 }

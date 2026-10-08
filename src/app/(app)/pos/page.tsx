@@ -42,18 +42,19 @@ export default async function PoListPage({ searchParams }: { searchParams: Promi
     status: PoStatus;
     vatRate: number;
     discount: number;
-    clientName: string;
+    clientName: string | null;
+    toWarehouse: boolean;
     supplierName: string | null;
     subtotal: number;
     lines: number;
   }>(
     `SELECT po.id, po.po_number AS poNumber, po.po_date AS poDate, po.expected_date AS expectedDate, po.status,
-            po.vat_rate AS vatRate, po.discount, c.name AS clientName,
+            po.vat_rate AS vatRate, po.discount, c.name AS clientName, po.to_warehouse AS toWarehouse,
             (SELECT GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ', ')
              FROM po_items x JOIN suppliers s ON s.id = x.supplier_id WHERE x.po_id = po.id) AS supplierName,
             COALESCE(SUM(pi.quantity * pi.unit_cost), 0) AS subtotal, COUNT(pi.id) AS \`lines\`
      FROM purchase_orders po
-     JOIN clients c ON c.id = po.client_id
+     LEFT JOIN clients c ON c.id = po.client_id
      LEFT JOIN po_items pi ON pi.po_id = po.id
      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
      GROUP BY po.id, c.name
@@ -96,7 +97,7 @@ export default async function PoListPage({ searchParams }: { searchParams: Promi
           <table className="table min-w-[860px]">
             <thead>
               <tr>
-                <th>PO No.</th><th>Date</th><th>Client</th><th>Supplier</th><th className="num">Lines</th><th className="num">Total</th><th>Expected</th><th>Status</th>
+                <th>PO No.</th><th>Date</th><th>Client / deliver to</th><th>Supplier</th><th className="num">Lines</th><th className="num">Total</th><th>Expected</th><th>Status</th>
               </tr>
             </thead>
             <tbody>
@@ -104,7 +105,7 @@ export default async function PoListPage({ searchParams }: { searchParams: Promi
                 <tr key={r.id} className="hover:bg-slate-50">
                   <td><Link href={`/pos/${r.id}`} className="font-medium text-brand-700 hover:underline">{r.poNumber}</Link></td>
                   <td className="whitespace-nowrap">{fmtDate(r.poDate)}</td>
-                  <td>{r.clientName}</td>
+                  <td>{r.clientName ?? <span className="text-slate-500">{r.toWarehouse ? "Warehouse" : "Direct to site"}</span>}</td>
                   <td>{r.supplierName}</td>
                   <td className="num">{Number(r.lines)}</td>
                   <td className="num">{peso(total(r))}</td>

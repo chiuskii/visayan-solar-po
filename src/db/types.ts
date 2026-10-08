@@ -66,7 +66,8 @@ export type Material = {
 export type PurchaseOrder = {
   id: number;
   poNumber: string;
-  clientId: number;
+  /** Older POs were raised per client; new ones have none (materials are assigned on issue). */
+  clientId: number | null;
   poDate: string;
   expectedDate: string | null;
   status: PoStatus;
@@ -165,6 +166,8 @@ export type CompanySettings = {
   showSignatures: boolean;
   /** Deliveries up to this id are already in the opening balances from the last log clear. */
   stockClearedDeliveryId: number;
+  /** Comma-separated email addresses for the stock report. */
+  reportRecipients: string | null;
   updatedAt: string;
 };
 
@@ -197,7 +200,7 @@ export const COLUMNS = {
   company_settings: {
     id: "id", companyName: "company_name", address: "address", phone: "phone", email: "email", tin: "tin", poPrefix: "po_prefix",
     defaultTerms: "default_terms", requireApproval: "require_approval", poFooter: "po_footer", showSignatures: "show_signatures",
-    stockClearedDeliveryId: "stock_cleared_delivery_id", updatedAt: "updated_at",
+    stockClearedDeliveryId: "stock_cleared_delivery_id", reportRecipients: "report_recipients", updatedAt: "updated_at",
   },
 } as const;
 

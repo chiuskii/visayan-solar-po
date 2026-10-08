@@ -22,8 +22,7 @@ export async function getPoDetail(id: number) {
   );
   if (!po) return null;
   const { createdByName, createdByDesignation, approvedByName, approvedByDesignation, ...poRow } = po;
-  const client = await queryOne<Client>(`SELECT ${cols("clients")} FROM clients WHERE id = ?`, [po.clientId]);
-  if (!client) return null;
+  const client = po.clientId ? ((await queryOne<Client>(`SELECT ${cols("clients")} FROM clients WHERE id = ?`, [po.clientId])) ?? null) : null;
 
   const items = await query<PoItem & { supplierName: string }>(
     `SELECT ${cols("po_items", "pi")}, s.name AS supplierName

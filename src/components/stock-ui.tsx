@@ -3,7 +3,7 @@ import { stockStatus, type StockRow } from "@/lib/inventory";
 
 const TYPE_STYLE: Record<StockType, [string, string]> = {
   RECEIVE: ["Received", "bg-emerald-50 text-emerald-700"],
-  ISSUE: ["Issued", "bg-blue-50 text-blue-700"],
+  ISSUE: ["Assigned", "bg-blue-50 text-blue-700"],
   ADJUST: ["Adjusted", "bg-slate-100 text-slate-700"],
 };
 

@@ -18,11 +18,13 @@ export type BulkDeleteResult = { deleted: number; skipped: string[] };
 async function idsInUse(entity: MasterKey, ids: number[]) {
   if (ids.length === 0) return new Set<number>();
   const sql = {
-    clients: "SELECT DISTINCT client_id AS id FROM purchase_orders WHERE client_id IN (?)",
+    clients: `SELECT client_id AS id FROM purchase_orders WHERE client_id IN (?)
+              UNION SELECT client_id FROM stock_movements WHERE client_id IN (?)`,
     suppliers: "SELECT DISTINCT supplier_id AS id FROM po_items WHERE supplier_id IN (?)",
     materials: "SELECT DISTINCT material_id AS id FROM stock_movements WHERE material_id IN (?)",
   }[entity];
-  return new Set((await query<{ id: number }>(sql, [ids])).map((r) => r.id));
+  const params = entity === "clients" ? [ids, ids] : [ids];
+  return new Set((await query<{ id: number }>(sql, params)).map((r) => r.id));
 }
 
 const cleanIds = (ids: unknown[]) => [...new Set(ids.map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 1000);

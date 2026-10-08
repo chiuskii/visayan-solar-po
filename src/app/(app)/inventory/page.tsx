@@ -40,15 +40,17 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
     <>
       <PageHeader
         title="Inventory"
-        subtitle="Stock on hand in the warehouse. Warehouse PO deliveries add stock; issuing to a project takes it out."
+        subtitle="Stock on hand in the warehouse. PO deliveries add stock; assigning materials to a client takes them out."
         actions={
           <>
+            <Link href="/inventory/clients" className="btn">Client history</Link>
+            <Link href="/inventory/report" className="btn">Stock report</Link>
             <Link href="/inventory/adjust" className="btn">Adjust stock</Link>
-            <Link href="/inventory/issue" className="btn btn-primary">Issue to project</Link>
+            <Link href="/inventory/issue" className="btn btn-primary">Assign to client</Link>
           </>
         }
       />
-      {sp.saved === "issue" && <p className="ok-box mb-4">Materials issued.</p>}
+      {sp.saved === "issue" && <p className="ok-box mb-4">Materials assigned.</p>}
       {sp.saved === "cleared" && <p className="ok-box mb-4">Movement log cleared. Each material’s stock was kept as an opening balance.</p>}
       <form className="mb-4 flex flex-wrap gap-2">
         <input className="input max-w-xs" name="q" defaultValue={q} placeholder="Search material, spec or category" />

@@ -47,3 +47,6 @@ export async function requireAdmin() {
   if (user.role !== "ADMIN") redirect("/?denied=1");
   return user;
 }
+
+/** Approvers, and admins, can approve POs. Admins' own POs need no separate approval. */
+export const canApprovePos = (user: Pick<CurrentUser, "role" | "canApprove">) => user.canApprove || user.role === "ADMIN";

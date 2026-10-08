@@ -99,9 +99,11 @@ export default async function PrintPoPage({
             </div>
             <div>
               <div className="mb-1 text-[11px] font-semibold tracking-wider text-slate-500 uppercase">Deliver to</div>
-              <div className="font-semibold">{client.name}</div>
-              <div className="whitespace-pre-line">{po.deliveryAddress || client.address || "—"}</div>
-              {client.contactPerson && <div>Contact: {client.contactPerson}{client.phone ? ` · ${client.phone}` : ""}</div>}
+              {/* Older POs were raised per client; new ones deliver to our warehouse (or a site). */}
+              <div className="font-semibold">{client ? client.name : co.companyName}</div>
+              <div className="whitespace-pre-line">{po.deliveryAddress || client?.address || co.address || "—"}</div>
+              {client?.contactPerson && <div>Contact: {client.contactPerson}{client.phone ? ` · ${client.phone}` : ""}</div>}
+              {!client && co.phone && <div>{co.phone}</div>}
             </div>
           </section>
 

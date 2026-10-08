@@ -55,6 +55,7 @@ export async function getSettings(): Promise<CompanySettings> {
       requireApproval: true,
       showSignatures: true,
       stockClearedDeliveryId: 0,
+      reportRecipients: null,
       updatedAt: "",
     }
   );

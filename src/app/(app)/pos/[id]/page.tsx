@@ -6,7 +6,7 @@ import { ConfirmButton, SubmitButton } from "@/components/client-ui";
 import { DeliveryForm } from "@/components/delivery-form";
 import { PageHeader, StatusBadge } from "@/components/ui";
 import { queryOne } from "@/db";
-import { requireUser } from "@/lib/auth";
+import { canApprovePos, requireUser } from "@/lib/auth";
 import { fmtDate, num, peso, todayPH } from "@/lib/format";
 import { getSettings } from "@/lib/po";
 import { getPoDetail } from "@/lib/po-queries";
@@ -31,7 +31,9 @@ export default async function PoDetailPage({
   const { po, client, items, totals, bySupplier } = detail;
   const multiSupplier = bySupplier.length > 1;
   const canReceive = po.status === "ORDERED" || po.status === "PARTIAL";
-  const canApproveThis = po.status === "PENDING" && user.canApprove && po.createdById !== user.id;
+  // Approvers review others' POs; admins can approve any, including their own.
+  const isAdmin = user.role === "ADMIN";
+  const canApproveThis = po.status === "PENDING" && canApprovePos(user) && (po.createdById !== user.id || isAdmin);
   const mySignature = canApproveThis
     ? ((await queryOne<{ signature: string | null }>("SELECT signature FROM users WHERE id = ?", [user.id]))?.signature ?? null)
     : null;
@@ -46,14 +48,14 @@ export default async function PoDetailPage({
             {po.poNumber} <StatusBadge status={po.status} />
           </span>
         }
-        subtitle={`${client.name} · from ${bySupplier.map((g) => g.supplier.name).join(", ") || "—"}`}
+        subtitle={`${client ? `${client.name} · ` : ""}from ${bySupplier.map((g) => g.supplier.name).join(", ") || "—"}`}
         actions={
           <>
             <a href={`/pos/${id}/print`} target="_blank" className="btn">Print / PDF</a>
             {po.status !== "CANCELLED" && <Link href={`/pos/${id}/edit`} className="btn">Edit</Link>}
             {po.status === "DRAFT" && (
               <form action={submitPo.bind(null, id)}>
-                <SubmitButton pendingText="Submitting…">{settings.requireApproval ? "Submit for approval" : "Mark as ordered"}</SubmitButton>
+                <SubmitButton pendingText="Submitting…">{settings.requireApproval && !isAdmin ? "Submit for approval" : settings.requireApproval ? "Approve & mark as ordered" : "Mark as ordered"}</SubmitButton>
               </form>
             )}
             {po.status === "CANCELLED" ? (
@@ -121,9 +123,15 @@ export default async function PoDetailPage({
 
       <div className="mb-6 grid gap-4 md:grid-cols-3">
         <div className="card p-4 text-sm">
-          <div className="label">Client</div>
-          <Link href={`/clients/${client.id}`} className="font-medium text-brand-700 hover:underline">{client.name}</Link>
-          {client.contactPerson && <div className="text-slate-600">{client.contactPerson}</div>}
+          <div className="label">{client ? "Client" : "Deliver to"}</div>
+          {client ? (
+            <>
+              <Link href={`/clients/${client.id}`} className="font-medium text-brand-700 hover:underline">{client.name}</Link>
+              {client.contactPerson && <div className="text-slate-600">{client.contactPerson}</div>}
+            </>
+          ) : (
+            <div className="font-medium">{po.toWarehouse ? "Warehouse" : "Direct to site"}</div>
+          )}
           {po.toWarehouse && <div className="mt-2"><span className="inline-flex rounded-full bg-brand-50 px-2 py-0.5 text-xs font-semibold text-brand-700">Warehouse delivery → adds to stock</span></div>}
           {po.deliveryAddress && <div className="mt-2 whitespace-pre-line text-slate-600"><span className="label mb-0 inline">Deliver to: </span>{po.deliveryAddress}</div>}
         </div>

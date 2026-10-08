@@ -7,9 +7,7 @@ import { blankLine, isBlankLine, lineAmount, LineItemsTable, linesJson, newKey, 
 import type { FormState } from "@/app/actions/pos";
 import { peso } from "@/lib/format";
 
-type Option = { id: number; name: string };
-type ClientOpt = Option & { address: string | null };
-type SupplierOpt = Option & { paymentTerms: string | null };
+type SupplierOpt = { id: number; name: string; paymentTerms: string | null };
 export type BundleOpt = {
   id: number;
   name: string;
@@ -17,7 +15,6 @@ export type BundleOpt = {
 };
 
 export type PoFormValues = {
-  clientId: number | "";
   toWarehouse: boolean;
   poDate: string;
   expectedDate: string;
@@ -32,7 +29,6 @@ export type PoFormValues = {
 export function PoForm({
   action,
   initial,
-  clients,
   suppliers,
   materials,
   bundles,
@@ -43,7 +39,6 @@ export function PoForm({
 }: {
   action: (prev: FormState, fd: FormData) => Promise<FormState>;
   initial: PoFormValues;
-  clients: ClientOpt[];
   suppliers: SupplierOpt[];
   materials: MaterialOpt[];
   bundles: BundleOpt[];
@@ -56,7 +51,6 @@ export function PoForm({
 }) {
   const [state, onSubmit, pending] = useFormAction<FormState>(action, {});
   const [lines, setLines] = useState<Line[]>(initial.items.length ? initial.items : [blankLine()]);
-  const [clientId, setClientId] = useState<number | "">(initial.clientId);
   const [deliveryAddress, setDeliveryAddress] = useState(initial.deliveryAddress);
   const [terms, setTerms] = useState(initial.terms);
   const [vatRate, setVatRate] = useState(String(initial.vatRate));
@@ -110,13 +104,6 @@ export function PoForm({
     setBundleQty("1");
   }
 
-  function pickClient(value: string) {
-    const id = value ? Number(value) : "";
-    setClientId(id);
-    const c = clients.find((x) => x.id === id);
-    if (c?.address && !deliveryAddress) setDeliveryAddress(c.address);
-  }
-
   const itemsJson = linesJson(lines);
 
   return (
@@ -124,18 +111,6 @@ export function PoForm({
       <input type="hidden" name="items" value={itemsJson} />
 
       <section className="card grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="sm:col-span-2">
-          <label className="label" htmlFor="clientId">Client *</label>
-          <select id="clientId" name="clientId" className="input" value={clientId} onChange={(e) => pickClient(e.target.value)} required>
-            <option value="">Choose a client…</option>
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-          {clients.length === 0 && (
-            <p className="mt-1 text-xs text-slate-500">No clients yet — <Link className="text-brand-600 underline" href="/clients/new">add one</Link>.</p>
-          )}
-        </div>
         <div>
           <label className="label" htmlFor="poDate">PO date *</label>
           <input id="poDate" name="poDate" type="date" className="input" defaultValue={initial.poDate} required />
@@ -151,12 +126,13 @@ export function PoForm({
         <label className="flex items-start gap-2 text-sm sm:col-span-2 lg:col-span-4">
           <input type="checkbox" name="toWarehouse" defaultChecked={initial.toWarehouse} className="mt-0.5" />
           <span>
-            <b>Deliver to warehouse</b> — received quantities are added to Inventory stock. Leave unticked for direct-to-site deliveries.
+            <b>Deliver to warehouse</b> — received quantities are added to Inventory stock, ready to assign to clients. Untick only for
+            orders delivered straight to a site.
           </span>
         </label>
         <div className="sm:col-span-2 lg:col-span-4">
           <label className="label" htmlFor="deliveryAddress">Deliver to</label>
-          <textarea id="deliveryAddress" name="deliveryAddress" rows={2} className="input" value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} placeholder="Project site or warehouse address" />
+          <textarea id="deliveryAddress" name="deliveryAddress" rows={2} className="input" value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} placeholder="Warehouse or site address" />
         </div>
       </section>
 

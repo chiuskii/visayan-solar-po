@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Empty, PageHeader, StatusBadge } from "@/components/ui";
 import { query, queryOne } from "@/db";
 import type { PoStatus } from "@/db/types";
-import { requireUser } from "@/lib/auth";
+import { canApprovePos, requireUser } from "@/lib/auth";
 import { fmtDate, peso, todayPH } from "@/lib/format";
 
 export const metadata = { title: "Dashboard" };
@@ -28,15 +28,16 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     poNumber: string;
     status: PoStatus;
     expectedDate: string | null;
-    clientName: string;
+    clientName: string | null;
+    toWarehouse: boolean;
     supplierName: string | null;
   }>(
     `SELECT po.id, po.po_number AS poNumber, po.status, po.expected_date AS expectedDate,
-            c.name AS clientName,
+            c.name AS clientName, po.to_warehouse AS toWarehouse,
             (SELECT GROUP_CONCAT(DISTINCT s.name ORDER BY s.name SEPARATOR ', ')
              FROM po_items x JOIN suppliers s ON s.id = x.supplier_id WHERE x.po_id = po.id) AS supplierName
      FROM purchase_orders po
-     JOIN clients c ON c.id = po.client_id
+     LEFT JOIN clients c ON c.id = po.client_id
      WHERE po.status IN ('DRAFT', 'PENDING', 'ORDERED', 'PARTIAL')
      ORDER BY po.expected_date IS NULL, po.expected_date, po.id DESC
      LIMIT 15`,
@@ -50,7 +51,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   );
 
   // POs waiting for this user to approve (approvers can't approve their own).
-  const toApprove = user.canApprove
+  const toApprove = canApprovePos(user)
     ? await queryOne<{ n: number }>("SELECT COUNT(*) AS n FROM purchase_orders WHERE status = 'PENDING' AND (created_by_id IS NULL OR created_by_id <> ?)", [user.id])
     : null;
 
@@ -101,14 +102,14 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <Empty>No open POs. <Link href="/pos/new" className="text-brand-600 underline">Create one</Link>.</Empty>
         ) : (
           <table className="table min-w-[640px]">
-            <thead><tr><th>PO No.</th><th>Client</th><th>Supplier</th><th>Expected</th><th>Status</th></tr></thead>
+            <thead><tr><th>PO No.</th><th>Client / deliver to</th><th>Supplier</th><th>Expected</th><th>Status</th></tr></thead>
             <tbody>
               {open.map((r) => {
                 const late = r.expectedDate && r.expectedDate < today;
                 return (
                   <tr key={r.id} className="hover:bg-slate-50">
                     <td><Link className="font-medium text-brand-700 hover:underline" href={`/pos/${r.id}`}>{r.poNumber}</Link></td>
-                    <td>{r.clientName}</td>
+                    <td>{r.clientName ?? <span className="text-slate-500">{r.toWarehouse ? "Warehouse" : "Direct to site"}</span>}</td>
                     <td>{r.supplierName}</td>
                     <td className={late ? "font-medium text-red-600" : ""}>{fmtDate(r.expectedDate)}{late ? " · overdue" : ""}</td>
                     <td><StatusBadge status={r.status} /></td>

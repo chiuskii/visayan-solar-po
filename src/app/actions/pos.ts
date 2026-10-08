@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { execute, query, queryOne, transaction } from "@/db";
 import { toRow, type PoItem, type PoStatus } from "@/db/types";
-import { requireAdmin, requireUser } from "@/lib/auth";
+import { canApprovePos, requireAdmin, requireUser } from "@/lib/auth";
 import { assertNoNegativeStock, NegativeStockError, syncPoStock } from "@/lib/inventory";
 import { getSettings, nextPoNumber, poHasDeliveries, receivedByItem, refreshDeliveryStatus, round2 } from "@/lib/po";
 
@@ -31,7 +31,6 @@ const itemSchema = z.object({
 });
 
 const poSchema = z.object({
-  clientId: z.coerce.number().int().positive("Choose a client."),
   poDate: dateStr,
   expectedDate: z.union([dateStr, z.literal("")]).transform((v) => v || null),
   deliveryAddress: optText(2000),
@@ -50,7 +49,6 @@ function parsePoForm(formData: FormData) {
     items = [];
   }
   const parsed = poSchema.safeParse({
-    clientId: formData.get("clientId"),
     poDate: formData.get("poDate") ?? "",
     expectedDate: formData.get("expectedDate") ?? "",
     deliveryAddress: formData.get("deliveryAddress") ?? "",
@@ -94,9 +92,11 @@ export async function createPo(_prev: FormState, formData: FormData): Promise<Fo
   const supplierError = await checkSuppliers(items);
   if (supplierError) return { error: supplierError };
   // "order" submits it: straight to ORDERED, or to PENDING when approval is required.
+  // An admin's PO is approved in their name as it's submitted.
   const { requireApproval } = await getSettings();
   const submit = formData.get("intent") === "order";
-  const status = !submit ? "DRAFT" : requireApproval ? "PENDING" : "ORDERED";
+  const selfApproved = submit && requireApproval && user.role === "ADMIN";
+  const status = !submit ? "DRAFT" : requireApproval && !selfApproved ? "PENDING" : "ORDERED";
 
   let newId = 0;
   for (let attempt = 0; attempt < 3 && !newId; attempt++) {
@@ -105,7 +105,16 @@ export async function createPo(_prev: FormState, formData: FormData): Promise<Fo
         const poNumber = await nextPoNumber(header.poDate);
         const res = await execute(
           "INSERT INTO purchase_orders SET ?",
-          [toRow("purchase_orders", { ...header, poNumber, status, createdById: user.id, submittedAt: submit ? new Date() : null })],
+          [
+            toRow("purchase_orders", {
+              ...header,
+              poNumber,
+              status,
+              createdById: user.id,
+              submittedAt: submit ? new Date() : null,
+              ...(selfApproved ? { approvedById: user.id, approvedAt: new Date() } : {}),
+            }),
+          ],
           conn,
         );
         const poId = res.insertId;
@@ -124,7 +133,7 @@ export async function createPo(_prev: FormState, formData: FormData): Promise<Fo
 }
 
 export async function updatePo(poId: number, _prev: FormState, formData: FormData): Promise<FormState> {
-  await requireUser();
+  const user = await requireUser();
   const parsed = parsePoForm(formData);
   if ("error" in parsed) return { error: parsed.error };
   const { items, ...header } = parsed.data;
@@ -138,8 +147,10 @@ export async function updatePo(poId: number, _prev: FormState, formData: FormDat
   if (!po) return { error: "This PO no longer exists." };
   if (po.status === "CANCELLED") return { error: "Reopen this PO before editing it." };
   // Changing an approved PO withdraws the approval: it goes back to the approver.
+  // An admin's edits are approved in their name instead.
   const { requireApproval } = await getSettings();
-  const needsReapproval = requireApproval && po.approvedById !== null;
+  const needsReapproval = requireApproval && po.approvedById !== null && user.role !== "ADMIN";
+  const reapprovedByAdmin = requireApproval && po.approvedById !== null && user.role === "ADMIN";
 
   const existing = await query<{ id: number }>("SELECT id FROM po_items WHERE po_id = ?", [poId]);
   const existingIds = new Set(existing.map((e) => e.id));
@@ -162,6 +173,9 @@ export async function updatePo(poId: number, _prev: FormState, formData: FormDat
   try {
     await transaction(async (conn) => {
       await execute("UPDATE purchase_orders SET ? WHERE id = ?", [toRow("purchase_orders", header), poId], conn);
+      if (reapprovedByAdmin) {
+        await execute("UPDATE purchase_orders SET approved_by_id = ?, approved_at = NOW() WHERE id = ?", [user.id, poId], conn);
+      }
       if (needsReapproval) {
         await execute(
           "UPDATE purchase_orders SET status = 'PENDING', approved_by_id = NULL, approved_at = NULL, submitted_at = NOW() WHERE id = ?",
@@ -192,14 +206,25 @@ export async function updatePo(poId: number, _prev: FormState, formData: FormDat
   redirect(`/pos/${poId}`);
 }
 
-/** Sends a draft on: to the approver (PENDING) when approval is required, otherwise straight to ORDERED. */
+/**
+ * Sends a draft on: to the approver (PENDING) when approval is required, otherwise straight to
+ * ORDERED. When an admin submits it, it's approved in their name and goes straight to ORDERED.
+ */
 export async function submitPo(poId: number, _fd: FormData) {
-  await requireUser();
+  const user = await requireUser();
   const { requireApproval } = await getSettings();
-  await execute("UPDATE purchase_orders SET status = ?, submitted_at = NOW(), approval_note = NULL WHERE id = ? AND status = 'DRAFT'", [
-    requireApproval ? "PENDING" : "ORDERED",
-    poId,
-  ]);
+  if (requireApproval && user.role === "ADMIN") {
+    await execute(
+      `UPDATE purchase_orders SET status = 'ORDERED', submitted_at = NOW(), approval_note = NULL, approved_by_id = ?, approved_at = NOW()
+       WHERE id = ? AND status = 'DRAFT'`,
+      [user.id, poId],
+    );
+  } else {
+    await execute("UPDATE purchase_orders SET status = ?, submitted_at = NOW(), approval_note = NULL WHERE id = ? AND status = 'DRAFT'", [
+      requireApproval ? "PENDING" : "ORDERED",
+      poId,
+    ]);
+  }
   await refreshDeliveryStatus(poId);
   revalidatePath(`/pos/${poId}`);
   revalidatePath("/pos");
@@ -208,13 +233,13 @@ export async function submitPo(poId: number, _fd: FormData) {
 /** Approver signs off a PO waiting for approval: it becomes ORDERED with their name, designation and e-signature. */
 export async function approvePo(poId: number, _fd: FormData) {
   const user = await requireUser();
-  if (!user.canApprove) redirect(`/pos/${poId}?error=not-approver`);
+  if (!canApprovePos(user)) redirect(`/pos/${poId}?error=not-approver`);
   const po = await queryOne<{ status: PoStatus; createdById: number | null }>(
     "SELECT status, created_by_id AS createdById FROM purchase_orders WHERE id = ?",
     [poId],
   );
   if (!po || po.status !== "PENDING") redirect(`/pos/${poId}`);
-  if (po.createdById === user.id) redirect(`/pos/${poId}?error=own-po`);
+  if (po.createdById === user.id && user.role !== "ADMIN") redirect(`/pos/${poId}?error=own-po`);
   const me = await queryOne<{ hasSignature: number }>("SELECT signature IS NOT NULL AS hasSignature FROM users WHERE id = ?", [user.id]);
   if (!Number(me?.hasSignature)) redirect(`/pos/${poId}?error=no-signature`);
   await execute(
@@ -230,7 +255,7 @@ export async function approvePo(poId: number, _fd: FormData) {
 /** Approver sends a PO back to draft with a note saying what to change. */
 export async function returnPo(poId: number, _prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
-  if (!user.canApprove) return { error: "Only approvers can return a PO." };
+  if (!canApprovePos(user)) return { error: "Only approvers can return a PO." };
   const note = String(formData.get("note") ?? "").trim().slice(0, 2000);
   if (!note) return { error: "Say what needs to change, so the preparer knows what to fix." };
   const res = await execute(

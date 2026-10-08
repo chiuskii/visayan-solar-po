@@ -135,6 +135,10 @@ export function SettingsForm({ initial }: { initial: Settings }) {
           <span>Show e-signatures on printed POs by default (can still be switched off on each print)</span>
         </label>
         {field("poFooter", "PO footer note", { area: true, wide: true })}
+        {field("reportRecipients", "Stock report recipients", {
+          wide: true,
+          hint: "Email addresses that receive the stock report (Inventory → Stock report), separated by commas.",
+        })}
       </div>
       <Msg state={state} />
       <button className="btn btn-primary" disabled={pending}>{pending ? "Saving…" : "Save settings"}</button>
