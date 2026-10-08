@@ -63,8 +63,16 @@ export default async function PoDetailPage({
             ) : (
               po.status !== "DELIVERED" && <ConfirmButton action={cancelPo.bind(null, id)} label="Cancel PO" confirmLabel="Yes, cancel PO" />
             )}
-            {user.role === "ADMIN" && detail.deliveries.length === 0 && (
-              <ConfirmButton action={deletePo.bind(null, id)} label="Delete" confirmLabel="Delete permanently" />
+            {user.role === "ADMIN" && (
+              <ConfirmButton
+                action={deletePo.bind(null, id)}
+                label="Delete"
+                confirmLabel={
+                  detail.deliveries.length
+                    ? `Delete PO and its ${detail.deliveries.length} ${detail.deliveries.length === 1 ? "delivery" : "deliveries"}`
+                    : "Delete permanently"
+                }
+              />
             )}
           </>
         }
@@ -75,7 +83,12 @@ export default async function PoDetailPage({
           Some of the stock from that delivery has already been issued, so it can’t be removed. Adjust or remove those issues in Inventory first.
         </p>
       )}
-      {sp.error === "has-deliveries" && <p className="error-box mb-4">This PO has deliveries recorded, so it can’t be deleted. Cancel it instead.</p>}
+      {sp.error === "delete-stock-issued" && (
+        <p className="error-box mb-4">
+          This PO can’t be deleted: some of the stock its deliveries added to Inventory has already been issued. Adjust or remove those issues
+          first, or cancel the PO instead.
+        </p>
+      )}
       {sp.saved === "delivery" && <p className="ok-box mb-4">Delivery saved.</p>}
       {sp.saved === "approved" && <p className="ok-box mb-4">Approved and signed. The PO is now ordered.</p>}
       {sp.saved === "returned" && <p className="ok-box mb-4">Returned to the preparer with your note.</p>}

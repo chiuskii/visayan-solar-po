@@ -7,7 +7,7 @@ import { fmtDate, peso, STATUS_LABEL } from "@/lib/format";
 
 export const metadata = { title: "Purchase Orders" };
 
-type SP = { q?: string; status?: string; client?: string };
+type SP = { q?: string; status?: string; client?: string; deleted?: string };
 
 export default async function PoListPage({ searchParams }: { searchParams: Promise<SP> }) {
   await requireUser();
@@ -75,6 +75,7 @@ export default async function PoListPage({ searchParams }: { searchParams: Promi
         subtitle={`${rows.length} shown`}
         actions={<Link href="/pos/new" className="btn btn-primary">+ New PO</Link>}
       />
+      {sp.deleted && <p className="ok-box mb-4">PO deleted.</p>}
       <form className="mb-4 flex flex-wrap gap-2">
         <input className="input max-w-xs" name="q" defaultValue={q} placeholder="PO no., client or supplier" />
         <select className="input w-auto" name="client" defaultValue={clientId ?? ""}>

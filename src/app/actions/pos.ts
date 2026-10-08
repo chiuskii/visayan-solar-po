@@ -262,12 +262,29 @@ export async function reopenPo(poId: number, _fd: FormData) {
   revalidatePath(`/pos/${poId}`);
 }
 
+/**
+ * Admin: deletes a PO in any status, with its lines and deliveries. Stock its warehouse
+ * deliveries added is removed too (cascade) — unless some of it has already been issued.
+ */
 export async function deletePo(poId: number, _fd: FormData) {
   await requireAdmin();
-  if (await poHasDeliveries(poId)) redirect(`/pos/${poId}?error=has-deliveries`);
-  await execute("DELETE FROM purchase_orders WHERE id = ?", [poId]);
+  const mats = await query<{ id: number }>(
+    `SELECT DISTINCT sm.material_id AS id FROM stock_movements sm
+     JOIN deliveries d ON d.id = sm.delivery_id WHERE d.po_id = ?`,
+    [poId],
+  );
+  try {
+    await transaction(async (conn) => {
+      await execute("DELETE FROM purchase_orders WHERE id = ?", [poId], conn);
+      await assertNoNegativeStock(mats.map((m) => m.id), conn);
+    });
+  } catch (e) {
+    if (e instanceof NegativeStockError) redirect(`/pos/${poId}?error=delete-stock-issued`);
+    throw e;
+  }
   revalidatePath("/pos");
-  redirect("/pos");
+  revalidatePath("/inventory");
+  redirect("/pos?deleted=1");
 }
 
 export async function createDelivery(poId: number, _prev: FormState, formData: FormData): Promise<FormState> {

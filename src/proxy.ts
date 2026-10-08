@@ -9,6 +9,8 @@ export async function proxy(req: NextRequest) {
   if (pathname === "/login") {
     return session ? NextResponse.redirect(new URL("/", req.url)) : NextResponse.next();
   }
+  // Changing a password from the sign-in page checks the current password itself.
+  if (pathname === "/login/change-password") return NextResponse.next();
   if (!session) {
     const url = new URL("/login", req.url);
     if (pathname !== "/") url.searchParams.set("next", pathname);
