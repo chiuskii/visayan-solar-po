@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { execute, queryOne } from "@/db";
 import { cols, type User } from "@/db/types";
 import { createSession, destroySession } from "@/lib/auth";
+import { clearFailures, clientIp, failureMessage, lockMinutesLeft, lockedMessage, recordFailure } from "@/lib/rate-limit";
 
 export type LoginState = { error?: string };
 
@@ -14,9 +15,15 @@ export async function login(_prev: LoginState, formData: FormData): Promise<Logi
   const next = String(formData.get("next") ?? "/");
   if (!email || !password) return { error: "Enter your email and password." };
 
+  // Rate limit by IP: a locked-out address isn't checked at all.
+  const ip = await clientIp();
+  const locked = await lockMinutesLeft(ip);
+  if (locked) return { error: lockedMessage(locked) };
+
   const user = await queryOne<User>(`SELECT ${cols("users")} FROM users WHERE email = ?`, [email]);
   const ok = user && user.active && (await bcrypt.compare(password, user.passwordHash));
-  if (!ok) return { error: "Email or password is incorrect." };
+  if (!ok) return { error: failureMessage("Email or password is incorrect.", await recordFailure(ip)) };
+  await clearFailures(ip);
 
   await createSession({ id: user.id, name: user.name, email: user.email, role: user.role, canApprove: user.canApprove });
   redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/");
@@ -37,12 +44,18 @@ export async function changePasswordFromLogin(_prev: LoginState, formData: FormD
   if (next !== confirm) return { error: "The two new passwords don’t match." };
   if (next === current) return { error: "The new password must be different from the current one." };
 
+  // Same IP rate limit as sign-in: this form also checks a password.
+  const ip = await clientIp();
+  const locked = await lockMinutesLeft(ip);
+  if (locked) return { error: lockedMessage(locked) };
+
   const user = await queryOne<Pick<User, "id" | "passwordHash" | "active">>(
     "SELECT id, password_hash AS passwordHash, active FROM users WHERE email = ?",
     [email],
   );
   const ok = user && user.active && (await bcrypt.compare(current, user.passwordHash));
-  if (!ok) return { error: "Email or current password is incorrect." };
+  if (!ok) return { error: failureMessage("Email or current password is incorrect.", await recordFailure(ip)) };
+  await clearFailures(ip);
 
   await execute("UPDATE users SET password_hash = ? WHERE id = ?", [await bcrypt.hash(next, 10), user.id]);
   redirect("/login?changed=1");
