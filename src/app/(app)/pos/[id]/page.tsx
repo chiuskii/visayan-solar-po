@@ -8,7 +8,9 @@ import { PageHeader, StatusBadge } from "@/components/ui";
 import { queryOne } from "@/db";
 import { canApprovePos, requireUser } from "@/lib/auth";
 import { fmtDate, num, peso, todayPH } from "@/lib/format";
+import { gmailComposeUrl } from "@/lib/gmail";
 import { getSettings } from "@/lib/po";
+import { appBaseUrl, approvalRequestEmail, approversFor, decisionEmail, userById } from "@/lib/po-notify";
 import { getPoDetail } from "@/lib/po-queries";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
@@ -38,6 +40,28 @@ export default async function PoDetailPage({
     ? ((await queryOne<{ signature: string | null }>("SELECT signature FROM users WHERE id = ?", [user.id]))?.signature ?? null)
     : null;
   const totalBalance = items.reduce((s, i) => s + i.balance, 0);
+
+  // Gmail notifications, sent from the person's own account: the preparer asks the approvers;
+  // after a decision, the approver tells the preparer.
+  const link = `${await appBaseUrl()}/pos/${id}`;
+  const isPreparer = po.createdById === user.id;
+  let askApprovers: { url: string; names: string } | null = null;
+  let noApprovers = false;
+  if (po.status === "PENDING" && isPreparer) {
+    const [me, approvers] = await Promise.all([userById(user.id), approversFor(po.createdById)]);
+    if (me && approvers.length) {
+      const mail = approvalRequestEmail(detail, me, approvers, link);
+      askApprovers = { url: gmailComposeUrl({ from: me.email, to: approvers.map((a) => a.email), ...mail }), names: approvers.map((a) => a.name).join(", ") };
+    } else noApprovers = true;
+  }
+  let tellPreparer: { url: string; name: string } | null = null;
+  if ((sp.saved === "approved" || sp.saved === "returned") && !isPreparer) {
+    const [me, preparer] = await Promise.all([userById(user.id), userById(po.createdById)]);
+    if (me && preparer) {
+      const mail = decisionEmail(detail, me, preparer, link);
+      tellPreparer = { url: gmailComposeUrl({ from: me.email, to: preparer.email, ...mail }), name: preparer.name };
+    }
+  }
 
   return (
     <>
@@ -92,8 +116,14 @@ export default async function PoDetailPage({
         </p>
       )}
       {sp.saved === "delivery" && <p className="ok-box mb-4">Delivery saved.</p>}
-      {sp.saved === "approved" && <p className="ok-box mb-4">Approved and signed. The PO is now ordered.</p>}
-      {sp.saved === "returned" && <p className="ok-box mb-4">Returned to the preparer with your note.</p>}
+      {(sp.saved === "approved" || sp.saved === "returned") && (
+        <div className="ok-box mb-4 flex flex-wrap items-center justify-between gap-3">
+          <span>{sp.saved === "approved" ? "Approved and signed. The PO is now ordered." : "Returned to the preparer with your note."}</span>
+          {tellPreparer && (
+            <a href={tellPreparer.url} target="_blank" rel="noopener noreferrer" className="btn btn-sm">Email {tellPreparer.name} in Gmail</a>
+          )}
+        </div>
+      )}
       {sp.error === "not-approver" && <p className="error-box mb-4">Only users marked as approvers can approve POs.</p>}
       {sp.error === "own-po" && <p className="error-box mb-4">You prepared this PO, so another approver needs to approve it.</p>}
       {sp.error === "no-signature" && (
@@ -108,9 +138,16 @@ export default async function PoDetailPage({
         </div>
       )}
       {po.status === "PENDING" && !canApproveThis && (
-        <p className="mb-4 rounded-md border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm text-violet-900">
-          Waiting for approval{po.createdById === user.id && user.canApprove ? " by another approver (you prepared this PO)" : ""}.
-        </p>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm text-violet-900">
+          <span>
+            Waiting for approval{isPreparer && user.canApprove ? " by another approver (you prepared this PO)" : ""}.
+            {askApprovers && <> Let the approvers know: <b>{askApprovers.names}</b>.</>}
+            {noApprovers && " No approvers are set up yet. Ask an admin to tick Approver on a user."}
+          </span>
+          {askApprovers && (
+            <a href={askApprovers.url} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-primary">Notify approvers in Gmail</a>
+          )}
+        </div>
       )}
       {canApproveThis && (
         <ApprovalPanel

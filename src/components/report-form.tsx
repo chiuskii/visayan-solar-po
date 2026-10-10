@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { draftStockEmail, type DraftState } from "@/app/actions/report";
+import { gmailComposeUrl } from "@/lib/gmail";
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const DEFAULT_ACCOUNT = "inventory@visayansolar.com";
@@ -112,11 +113,7 @@ export function ReportForm({ defaultTo }: { defaultTo: string }) {
     setCopied(msg);
     setTimeout(() => setCopied((c) => (c === msg ? "" : c)), 4000);
   };
-  const gmailUrl =
-    "https://mail.google.com/mail/?view=cm&fs=1" +
-    (account.trim() ? `&authuser=${encodeURIComponent(account.trim())}` : "") +
-    (to.trim() ? `&to=${encodeURIComponent(to.trim())}` : "") +
-    (subject.trim() ? `&su=${encodeURIComponent(subject.trim())}` : "");
+  const gmailUrl = gmailComposeUrl({ from: account, to, subject });
 
   return (
     <div className="card space-y-4 p-5">
