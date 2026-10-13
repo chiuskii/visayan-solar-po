@@ -1,7 +1,7 @@
 import "server-only";
 import type { PoolConnection } from "mysql2/promise";
-import { execute, getPool, query } from "@/db";
-import type { StockMovement } from "@/db/types";
+import { execute, getPool, query, queryOne, transaction } from "@/db";
+import { toRow, type StockMovement } from "@/db/types";
 
 /** Stock on hand per material (materials with no movements are left out). */
 export async function onHandByMaterial(materialIds?: number[], conn?: PoolConnection) {
@@ -143,4 +143,45 @@ export async function recentMovements(page: number, perPage = 10) {
     query<{ n: number }>("SELECT COUNT(*) AS n FROM stock_movements"),
   ]);
   return { rows, total: Number(total[0]?.n ?? 0) };
+}
+
+/**
+ * Records a stock adjustment: `mode` "change" changes on hand by `quantity` (negative removes),
+ * "set" records a count and adjusts on hand to match. Returns an error message, or null when saved.
+ */
+export async function recordAdjustment(a: {
+  materialId: number;
+  mode: "set" | "change";
+  quantity: number;
+  movementDate: string;
+  notes: string | null;
+  createdById: number | null;
+}) {
+  const quantity = Math.round(a.quantity * 100) / 100;
+  if (a.mode === "set" && quantity < 0) return "A counted quantity can’t be negative.";
+  return transaction(async (conn) => {
+    const mat = await queryOne("SELECT id FROM materials WHERE id = ? FOR UPDATE", [a.materialId], conn);
+    if (!mat) return "That material no longer exists.";
+    const have = (await onHandByMaterial([a.materialId], conn)).get(a.materialId) ?? 0;
+    const diff = Math.round((a.mode === "set" ? quantity - have : quantity) * 100) / 100;
+    if (diff === 0) return a.mode === "set" ? `On hand is already ${have}. Nothing to change.` : "Enter an amount to add or remove.";
+    const after = Math.round((have + diff) * 100) / 100;
+    if (after < 0) return `That would leave ${after} on hand. Only ${have} is in stock.`;
+    await execute(
+      "INSERT INTO stock_movements SET ?",
+      [
+        toRow("stock_movements", {
+          materialId: a.materialId,
+          type: "ADJUST",
+          quantity: diff,
+          movementDate: a.movementDate,
+          reference: a.mode === "set" ? `Count: ${quantity}` : null,
+          notes: a.notes,
+          createdById: a.createdById,
+        }),
+      ],
+      conn,
+    );
+    return null;
+  });
 }

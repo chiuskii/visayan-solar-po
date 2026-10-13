@@ -6,7 +6,7 @@ import { z } from "zod";
 import { execute, query, queryOne, transaction } from "@/db";
 import { toRow, type StockType } from "@/db/types";
 import { requireAdmin, requireUser } from "@/lib/auth";
-import { assertNoNegativeStock, NegativeStockError, onHandByMaterial } from "@/lib/inventory";
+import { assertNoNegativeStock, NegativeStockError, onHandByMaterial, recordAdjustment } from "@/lib/inventory";
 import { round2 } from "@/lib/po";
 
 export type FormState = { error?: string };
@@ -102,30 +102,7 @@ export async function adjustStock(_prev: FormState, formData: FormData): Promise
   const quantity = round2(parsed.data.quantity);
   if (mode === "set" && quantity < 0) return { error: "A counted quantity can’t be negative." };
 
-  const error = await transaction(async (conn) => {
-    const mat = await queryOne("SELECT id FROM materials WHERE id = ? FOR UPDATE", [materialId], conn);
-    if (!mat) return "That material no longer exists.";
-    const have = (await onHandByMaterial([materialId], conn)).get(materialId) ?? 0;
-    const diff = round2(mode === "set" ? quantity - have : quantity);
-    if (diff === 0) return mode === "set" ? `On hand is already ${have}. Nothing to change.` : "Enter an amount to add or remove.";
-    if (round2(have + diff) < 0) return `That would leave ${round2(have + diff)} on hand. Only ${have} is in stock.`;
-    await execute(
-      "INSERT INTO stock_movements SET ?",
-      [
-        toRow("stock_movements", {
-          materialId,
-          type: "ADJUST",
-          quantity: diff,
-          movementDate,
-          reference: mode === "set" ? `Count: ${quantity}` : null,
-          notes,
-          createdById: user.id,
-        }),
-      ],
-      conn,
-    );
-    return null;
-  });
+  const error = await recordAdjustment({ materialId, mode, quantity, movementDate, notes, createdById: user.id });
   if (error) return { error };
   revalidatePath("/inventory");
   redirect(`/inventory/${materialId}?saved=adjust`);

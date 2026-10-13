@@ -171,6 +171,36 @@ export type CompanySettings = {
   updatedAt: string;
 };
 
+export const API_FEATURES = ["purchase_orders", "inventory", "materials", "suppliers", "clients", "bundles"] as const;
+export type ApiFeature = (typeof API_FEATURES)[number];
+export const API_ACCESS_LEVELS = ["READ", "WRITE"] as const;
+export type ApiAccessLevel = (typeof API_ACCESS_LEVELS)[number];
+
+export type ApiKey = {
+  id: number;
+  name: string;
+  /** The first characters of the key, shown so admins can tell keys apart. */
+  keyPrefix: string;
+  /** SHA-256 (hex) of the full key; the key itself is never stored. */
+  keyHash: string;
+  active: boolean;
+  /** Last day the key works; null = no expiry. */
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  lastUsedIp: string | null;
+  notes: string | null;
+  createdById: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** One feature a key may use. Features without a row are off. */
+export type ApiKeyPermission = {
+  apiKeyId: number;
+  feature: ApiFeature;
+  accessLevel: ApiAccessLevel;
+};
+
 /** camelCase field → column name, per table. Used to build SELECT lists and INSERT/UPDATE statements. */
 export const COLUMNS = {
   users: {
@@ -202,6 +232,11 @@ export const COLUMNS = {
     defaultTerms: "default_terms", requireApproval: "require_approval", poFooter: "po_footer", showSignatures: "show_signatures",
     stockClearedDeliveryId: "stock_cleared_delivery_id", reportRecipients: "report_recipients", updatedAt: "updated_at",
   },
+  api_keys: {
+    id: "id", name: "name", keyPrefix: "key_prefix", keyHash: "key_hash", active: "active", expiresAt: "expires_at",
+    lastUsedAt: "last_used_at", lastUsedIp: "last_used_ip", notes: "notes", createdById: "created_by_id", createdAt: "created_at", updatedAt: "updated_at",
+  },
+  api_key_permissions: { apiKeyId: "api_key_id", feature: "feature", accessLevel: "access_level" },
 } as const;
 
 export type Table = keyof typeof COLUMNS;
