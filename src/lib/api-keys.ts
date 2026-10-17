@@ -8,6 +8,7 @@ import { clientIp } from "./rate-limit";
 export const FEATURE_INFO: Record<ApiFeature, { label: string; read: string; write?: string }> = {
   purchase_orders: { label: "Purchase orders", read: "List POs and read a PO with its lines, suppliers, totals and deliveries." },
   inventory: { label: "Inventory", read: "Stock on hand per material and each material’s movements.", write: "Record stock adjustments and counts." },
+  job_orders: { label: "Job orders", read: "List job orders and read one with its materials." },
   materials: { label: "Materials", read: "List and read materials.", write: "Add and edit materials." },
   suppliers: { label: "Suppliers", read: "List and read suppliers.", write: "Add and edit suppliers." },
   clients: { label: "Clients", read: "List and read clients.", write: "Add and edit clients." },

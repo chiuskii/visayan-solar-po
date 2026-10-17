@@ -93,7 +93,7 @@ export function IssueForm({
         </div>
         <div>
           <label className="label" htmlFor="reference">Reference</label>
-          <input id="reference" name="reference" className="input" placeholder="e.g. Job order / DR no." maxLength={120} />
+          <input id="reference" name="reference" className="input" placeholder="e.g. project name, DR no." maxLength={120} />
         </div>
         <div className="sm:col-span-2 lg:col-span-4">
           <label className="label" htmlFor="notes">Notes</label>
@@ -166,7 +166,7 @@ export function IssueForm({
 
       {state.error && <p className="error-box">{state.error}</p>}
       <div className="flex gap-2">
-        <button className="btn btn-primary" disabled={pending || !anyInStock}>{pending ? "Saving…" : "Assign materials"}</button>
+        <button className="btn btn-primary" disabled={pending || !anyInStock}>{pending ? "Saving…" : "Assign & create job order"}</button>
         <Link href="/inventory" className="btn">Cancel</Link>
       </div>
     </form>

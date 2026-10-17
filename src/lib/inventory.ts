@@ -112,18 +112,20 @@ export type MovementRow = StockMovement & {
   clientName: string | null;
   byName: string | null;
   poId: number | null;
+  joNumber: string | null;
 };
 
 const MOVEMENT_SELECT = `
   SELECT sm.id, sm.material_id AS materialId, sm.type, sm.quantity, sm.movement_date AS movementDate,
-         sm.delivery_id AS deliveryId, sm.po_item_id AS poItemId, sm.client_id AS clientId, sm.reference, sm.notes,
+         sm.delivery_id AS deliveryId, sm.po_item_id AS poItemId, sm.client_id AS clientId, sm.job_order_id AS jobOrderId, sm.reference, sm.notes,
          sm.created_by_id AS createdById, sm.created_at AS createdAt,
-         m.name AS materialName, m.unit AS materialUnit, c.name AS clientName, u.name AS byName, d.po_id AS poId
+         m.name AS materialName, m.unit AS materialUnit, c.name AS clientName, u.name AS byName, d.po_id AS poId, jo.jo_number AS joNumber
   FROM stock_movements sm
   JOIN materials m ON m.id = sm.material_id
   LEFT JOIN clients c ON c.id = sm.client_id
   LEFT JOIN users u ON u.id = sm.created_by_id
-  LEFT JOIN deliveries d ON d.id = sm.delivery_id`;
+  LEFT JOIN deliveries d ON d.id = sm.delivery_id
+  LEFT JOIN job_orders jo ON jo.id = sm.job_order_id`;
 
 /** A material's movements, newest first, each with the balance after it. */
 export async function materialLedger(materialId: number) {

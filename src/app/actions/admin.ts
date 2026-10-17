@@ -114,6 +114,7 @@ export async function saveSettings(_prev: FormState, formData: FormData): Promis
   const companyName = s("companyName", 190);
   if (!companyName) return { error: "Enter the company name." };
   const poPrefix = (s("poPrefix", 20) ?? "VS-PO").replace(/[^A-Za-z0-9-]/g, "");
+  const joPrefix = (s("joPrefix", 20) ?? "VS-JO").replace(/[^A-Za-z0-9-]/g, "");
   const recipients = parseEmailList(String(formData.get("reportRecipients") ?? ""));
   if (recipients.invalid.length) return { error: `Not a valid email address: ${recipients.invalid.join(", ")}` };
   const values = {
@@ -123,6 +124,7 @@ export async function saveSettings(_prev: FormState, formData: FormData): Promis
     email: s("email", 190),
     tin: s("tin", 40),
     poPrefix: poPrefix || "VS-PO",
+    joPrefix: joPrefix || "VS-JO",
     defaultTerms: s("defaultTerms", 190),
     poFooter: s("poFooter", 2000),
     reportRecipients: recipients.emails.join(", ") || null,

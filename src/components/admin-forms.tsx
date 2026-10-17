@@ -123,7 +123,7 @@ export function SettingsForm({ initial }: { initial: Settings }) {
         {field("tin", "TIN")}
         {field("poPrefix", "PO number prefix", { hint: "e.g. VS-PO gives VS-PO-2026-0001" })}
         {field("defaultTerms", "Default payment terms")}
-        <div />
+        {field("joPrefix", "Job order number prefix", { hint: "e.g. VS-JO gives VS-JO-2026-0001" })}
         <label className="flex items-start gap-2 text-sm sm:col-span-2">
           <input type="checkbox" name="requireApproval" defaultChecked={initial.requireApproval} className="mt-0.5" />
           <span>

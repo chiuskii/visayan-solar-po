@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { deleteMovement } from "@/app/actions/inventory";
 import { ConfirmButton } from "@/components/client-ui";
-import { MovementType, StockBadge } from "@/components/stock-ui";
+import { MovementRef, MovementType, StockBadge } from "@/components/stock-ui";
 import { Empty, PageHeader } from "@/components/ui";
 import { queryOne } from "@/db";
 import { requireUser } from "@/lib/auth";
@@ -45,6 +45,7 @@ export default async function StockHistoryPage({
         }
       />
       {saved === "adjust" && <p className="ok-box mb-4">Adjustment saved.</p>}
+      {error === "job-order" && <p className="error-box mb-4">That assignment belongs to a job order. Cancel the job order instead.</p>}
       {error === "negative" && <p className="error-box mb-4">Removing that would leave stock below zero, so it was kept.</p>}
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="card p-4">
@@ -80,12 +81,12 @@ export default async function StockHistoryPage({
                   <td className={`num ${r.quantity < 0 ? "text-red-700" : "text-emerald-700"}`}>{r.quantity > 0 ? "+" : ""}{num(r.quantity)}</td>
                   <td className="num font-medium">{num(r.balance)}</td>
                   <td>
-                    {r.poId ? <Link className="text-brand-700 hover:underline" href={`/pos/${r.poId}`}>{r.reference}</Link> : [r.clientName, r.reference].filter(Boolean).join(" · ") || "—"}
+                    <MovementRef m={r} />
                   </td>
                   <td className="max-w-xs text-slate-600">{r.notes ?? ""}</td>
                   <td className="whitespace-nowrap">{r.byName ?? "—"}</td>
                   <td>
-                    {user.role === "ADMIN" && r.type !== "RECEIVE" && (
+                    {user.role === "ADMIN" && r.type !== "RECEIVE" && !r.jobOrderId && (
                       <ConfirmButton action={deleteMovement.bind(null, r.id, id)} label="Remove" confirmLabel="Remove" className="btn btn-sm btn-danger" />
                     )}
                   </td>

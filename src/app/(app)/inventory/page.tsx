@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { clearMovementLog } from "@/app/actions/inventory";
 import { ConfirmButton } from "@/components/client-ui";
-import { MovementType, StockBadge } from "@/components/stock-ui";
+import { MovementRef, MovementType, StockBadge } from "@/components/stock-ui";
 import { Empty, PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
 import { fmtDate, num, peso } from "@/lib/format";
@@ -43,6 +43,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
         subtitle="Stock on hand in the warehouse. PO deliveries add stock; assigning materials to a client takes them out."
         actions={
           <>
+            <Link href="/inventory/job-orders" className="btn">Job orders</Link>
             <Link href="/inventory/clients" className="btn">Client history</Link>
             <Link href="/inventory/report" className="btn">Stock report</Link>
             <Link href="/inventory/adjust" className="btn">Adjust stock</Link>
@@ -121,7 +122,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
                   <td><Link className="text-brand-700 hover:underline" href={`/inventory/${m.materialId}`}>{m.materialName}</Link></td>
                   <td className={`num ${m.quantity < 0 ? "text-red-700" : "text-emerald-700"}`}>{m.quantity > 0 ? "+" : ""}{num(m.quantity)} {m.materialUnit}</td>
                   <td className="max-w-xs truncate">
-                    {m.poId ? <Link className="text-brand-700 hover:underline" href={`/pos/${m.poId}`}>{m.reference}</Link> : [m.clientName, m.reference].filter(Boolean).join(" · ") || m.notes || "—"}
+                    <MovementRef m={m} fallback={m.notes} />
                   </td>
                   <td>{m.byName ?? "—"}</td>
                 </tr>

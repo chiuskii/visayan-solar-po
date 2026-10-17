@@ -50,6 +50,7 @@ export async function getSettings(): Promise<CompanySettings> {
       email: null,
       tin: null,
       poPrefix: "VS-PO",
+      joPrefix: "VS-JO",
       defaultTerms: null,
       poFooter: null,
       requireApproval: true,

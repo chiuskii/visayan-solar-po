@@ -7,6 +7,7 @@ import { execute, query, queryOne, transaction } from "@/db";
 import { toRow, type StockType } from "@/db/types";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { assertNoNegativeStock, NegativeStockError, onHandByMaterial, recordAdjustment } from "@/lib/inventory";
+import { nextJoNumber } from "@/lib/job-orders";
 import { round2 } from "@/lib/po";
 
 export type FormState = { error?: string };
@@ -53,30 +54,91 @@ export async function issueStock(_prev: FormState, formData: FormData): Promise<
   const totals = new Map<number, number>();
   for (const l of parsed.data.lines) totals.set(l.materialId, round2((totals.get(l.materialId) ?? 0) + l.quantity));
 
-  const error = await transaction(async (conn) => {
+  // Creates the job order and its stock movements together; returns its id, or an error message.
+  const result = await transaction(async (conn): Promise<{ error: string } | { joId: number }> => {
     const ids = [...totals.keys()];
     // Lock the materials so two people issuing at once can't take the same stock.
-    const mats = await query<{ id: number; name: string; unit: string }>(
-      "SELECT id, name, unit FROM materials WHERE id IN (?) FOR UPDATE",
+    const mats = await query<{ id: number; name: string; spec: string | null; unit: string }>(
+      "SELECT id, name, spec, unit FROM materials WHERE id IN (?) FOR UPDATE",
       [ids],
       conn,
     );
-    if (mats.length !== ids.length) return "One of the materials no longer exists.";
+    if (mats.length !== ids.length) return { error: "One of the materials no longer exists." };
     const onHand = await onHandByMaterial(ids, conn);
     for (const m of mats) {
       const have = onHand.get(m.id) ?? 0;
-      if (totals.get(m.id)! > have) return `Only ${have} ${m.unit} of “${m.name}” on hand.`;
+      if (totals.get(m.id)! > have) return { error: `Only ${have} ${m.unit} of “${m.name}” on hand.` };
     }
-    await execute(
-      "INSERT INTO stock_movements (material_id, type, quantity, movement_date, client_id, reference, notes, created_by_id) VALUES ?",
-      [[...totals].map(([materialId, qty]) => [materialId, "ISSUE", -qty, movementDate, clientId, reference, notes, user.id])],
+    const joNumber = await nextJoNumber(movementDate, conn);
+    const jo = await execute(
+      "INSERT INTO job_orders SET ?",
+      [toRow("job_orders", { joNumber, clientId, joDate: movementDate, reference, notes, createdById: user.id })],
       conn,
     );
-    return null;
+    const joId = jo.insertId;
+    const byId = new Map(mats.map((m) => [m.id, m]));
+    await execute(
+      "INSERT INTO job_order_items (job_order_id, material_id, description, spec, unit, quantity, sort_order) VALUES ?",
+      [[...totals].map(([materialId, qty], n) => [joId, materialId, byId.get(materialId)!.name, byId.get(materialId)!.spec, byId.get(materialId)!.unit, qty, n])],
+      conn,
+    );
+    await execute(
+      "INSERT INTO stock_movements (material_id, type, quantity, movement_date, client_id, job_order_id, reference, notes, created_by_id) VALUES ?",
+      [[...totals].map(([materialId, qty]) => [materialId, "ISSUE", -qty, movementDate, clientId, joId, reference ?? joNumber, notes, user.id])],
+      conn,
+    );
+    return { joId };
   });
-  if (error) return { error };
+  if ("error" in result) return { error: result.error };
   revalidatePath("/inventory");
-  redirect("/inventory?saved=issue");
+  redirect(`/inventory/job-orders/${result.joId}?saved=created`);
+}
+
+/**
+ * Admin: cancels a job order and puts its materials back in stock. Its movements are removed; any
+ * already folded into an opening balance (log cleared since) are returned with an adjustment.
+ */
+export async function cancelJobOrder(id: number, _fd: FormData) {
+  const user = await requireAdmin();
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila" }).format(new Date());
+  await transaction(async (conn) => {
+    const jo = await queryOne<{ joNumber: string; status: string }>(
+      "SELECT jo_number AS joNumber, status FROM job_orders WHERE id = ? FOR UPDATE",
+      [id],
+      conn,
+    );
+    if (!jo || jo.status === "CANCELLED") return;
+    const items = await query<{ materialId: number | null; quantity: number }>(
+      "SELECT material_id AS materialId, quantity FROM job_order_items WHERE job_order_id = ?",
+      [id],
+      conn,
+    );
+    const moved = await query<{ materialId: number; qty: number }>(
+      "SELECT material_id AS materialId, -SUM(quantity) AS qty FROM stock_movements WHERE job_order_id = ? GROUP BY material_id",
+      [id],
+      conn,
+    );
+    const stillLogged = new Map(moved.map((m) => [m.materialId, Number(m.qty)]));
+    await execute("DELETE FROM stock_movements WHERE job_order_id = ?", [id], conn);
+    const returns = items
+      .filter((i) => i.materialId !== null)
+      .map((i) => [i.materialId!, round2(i.quantity - (stillLogged.get(i.materialId!) ?? 0))] as const)
+      .filter(([, qty]) => qty > 0);
+    if (returns.length) {
+      await execute(
+        "INSERT INTO stock_movements (material_id, type, quantity, movement_date, reference, notes, created_by_id) VALUES ?",
+        [returns.map(([materialId, qty]) => [materialId, "ADJUST", qty, today, jo.joNumber, `Job order ${jo.joNumber} cancelled`, user.id])],
+        conn,
+      );
+    }
+    await execute(
+      "UPDATE job_orders SET status = 'CANCELLED', cancelled_by_id = ?, cancelled_at = NOW() WHERE id = ?",
+      [user.id, id],
+      conn,
+    );
+  });
+  revalidatePath("/inventory");
+  redirect(`/inventory/job-orders/${id}?saved=cancelled`);
 }
 
 const adjustSchema = z.object({
@@ -142,10 +204,15 @@ export async function clearMovementLog(_fd: FormData) {
   redirect("/inventory?saved=cleared");
 }
 
-/** Removes a mistaken issue or adjustment. Receipts are removed by deleting the PO delivery instead. */
+/** Removes a mistaken adjustment (or an older assignment without a job order). Receipts are removed by deleting the PO delivery instead. */
 export async function deleteMovement(id: number, materialId: number, _fd: FormData) {
   await requireAdmin();
-  const m = await queryOne<{ type: StockType }>("SELECT type FROM stock_movements WHERE id = ? AND material_id = ?", [id, materialId]);
+  const m = await queryOne<{ type: StockType; jobOrderId: number | null }>(
+    "SELECT type, job_order_id AS jobOrderId FROM stock_movements WHERE id = ? AND material_id = ?",
+    [id, materialId],
+  );
+  // Assignments belong to a job order: cancel the job order instead, so it and the stock stay in step.
+  if (m?.jobOrderId) redirect(`/inventory/${materialId}?error=job-order`);
   if (m && m.type !== "RECEIVE") {
     try {
       await transaction(async (conn) => {

@@ -1,0 +1,80 @@
+import "server-only";
+import type { PoolConnection } from "mysql2/promise";
+import { query, queryOne } from "@/db";
+import { cols, type Client, type JobOrder, type JobOrderItem, type JoStatus } from "@/db/types";
+
+/**
+ * Next job order number, e.g. VS-JO-2026-0007 (sequence restarts each year). Call inside the
+ * transaction that inserts the job order: the row lock stops two assignments taking the same number.
+ */
+export async function nextJoNumber(joDate: string, conn: PoolConnection) {
+  const prefix = (await queryOne<{ p: string }>("SELECT jo_prefix AS p FROM company_settings WHERE id = 1", [], conn))?.p || "VS-JO";
+  const base = `${prefix}-${joDate.slice(0, 4)}-`;
+  const row = await queryOne<{ maxNo: string | null }>(
+    "SELECT MAX(jo_number) AS maxNo FROM job_orders WHERE jo_number LIKE ? FOR UPDATE",
+    [`${base}%`],
+    conn,
+  );
+  const last = row?.maxNo ? parseInt(row.maxNo.slice(base.length), 10) || 0 : 0;
+  return `${base}${String(last + 1).padStart(4, "0")}`;
+}
+
+export async function getJobOrder(id: number) {
+  const jo = await queryOne<JobOrder & { createdByName: string | null; createdByDesignation: string | null; cancelledByName: string | null }>(
+    `SELECT ${cols("job_orders", "jo")}, u.name AS createdByName, u.designation AS createdByDesignation, x.name AS cancelledByName
+     FROM job_orders jo
+     LEFT JOIN users u ON u.id = jo.created_by_id
+     LEFT JOIN users x ON x.id = jo.cancelled_by_id
+     WHERE jo.id = ?`,
+    [id],
+  );
+  if (!jo) return null;
+  const [client, items] = await Promise.all([
+    jo.clientId ? queryOne<Client>(`SELECT ${cols("clients")} FROM clients WHERE id = ?`, [jo.clientId]) : undefined,
+    query<JobOrderItem>(`SELECT ${cols("job_order_items")} FROM job_order_items WHERE job_order_id = ? ORDER BY sort_order, id`, [id]),
+  ]);
+  return { ...jo, client: client ?? null, items };
+}
+
+export type JobOrderDetail = NonNullable<Awaited<ReturnType<typeof getJobOrder>>>;
+
+export type JobOrderRow = JobOrder & { clientName: string | null; createdByName: string | null; lines: number };
+
+/** Job orders, newest first, with optional filters. */
+export async function listJobOrders(f: { clientId?: number | null; status?: JoStatus | null; search?: string; from?: string; to?: string; limit: number; offset: number }) {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (f.clientId) {
+    where.push("jo.client_id = ?");
+    params.push(f.clientId);
+  }
+  if (f.status) {
+    where.push("jo.status = ?");
+    params.push(f.status);
+  }
+  if (f.from) {
+    where.push("jo.jo_date >= ?");
+    params.push(f.from);
+  }
+  if (f.to) {
+    where.push("jo.jo_date <= ?");
+    params.push(f.to);
+  }
+  if (f.search) {
+    where.push("(jo.jo_number LIKE ? OR jo.reference LIKE ? OR c.name LIKE ?)");
+    params.push(`%${f.search}%`, `%${f.search}%`, `%${f.search}%`);
+  }
+  const FROM = `FROM job_orders jo LEFT JOIN clients c ON c.id = jo.client_id LEFT JOIN users u ON u.id = jo.created_by_id
+               ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`;
+  const [rows, count] = await Promise.all([
+    query<JobOrderRow>(
+      `SELECT ${cols("job_orders", "jo")}, c.name AS clientName, u.name AS createdByName,
+              (SELECT COUNT(*) FROM job_order_items i WHERE i.job_order_id = jo.id) AS \`lines\`
+       ${FROM}
+       ORDER BY jo.jo_date DESC, jo.id DESC LIMIT ? OFFSET ?`,
+      [...params, f.limit, f.offset],
+    ),
+    queryOne<{ n: number }>(`SELECT COUNT(*) AS n ${FROM}`, params),
+  ]);
+  return { rows, total: Number(count?.n ?? 0) };
+}

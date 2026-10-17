@@ -145,10 +145,43 @@ export type StockMovement = {
   deliveryId: number | null;
   poItemId: number | null;
   clientId: number | null;
+  /** The job order an ISSUE movement belongs to. */
+  jobOrderId: number | null;
   reference: string | null;
   notes: string | null;
   createdById: number | null;
   createdAt: string;
+};
+
+export const JO_STATUSES = ["ISSUED", "CANCELLED"] as const;
+export type JoStatus = (typeof JO_STATUSES)[number];
+
+/** Created automatically when materials are assigned to a client / project. */
+export type JobOrder = {
+  id: number;
+  joNumber: string;
+  clientId: number | null;
+  joDate: string;
+  status: JoStatus;
+  reference: string | null;
+  notes: string | null;
+  createdById: number | null;
+  cancelledById: number | null;
+  cancelledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** A copy of what was issued, kept even if the movement log is cleared. */
+export type JobOrderItem = {
+  id: number;
+  jobOrderId: number;
+  materialId: number | null;
+  description: string;
+  spec: string | null;
+  unit: string;
+  quantity: number;
+  sortOrder: number;
 };
 
 export type CompanySettings = {
@@ -159,6 +192,8 @@ export type CompanySettings = {
   email: string | null;
   tin: string | null;
   poPrefix: string;
+  /** Job order numbers, e.g. VS-JO → VS-JO-2026-0001. */
+  joPrefix: string;
   defaultTerms: string | null;
   poFooter: string | null;
   /** POs must be approved before they're ordered. */
@@ -171,7 +206,7 @@ export type CompanySettings = {
   updatedAt: string;
 };
 
-export const API_FEATURES = ["purchase_orders", "inventory", "materials", "suppliers", "clients", "bundles"] as const;
+export const API_FEATURES = ["purchase_orders", "inventory", "job_orders", "materials", "suppliers", "clients", "bundles"] as const;
 export type ApiFeature = (typeof API_FEATURES)[number];
 export const API_ACCESS_LEVELS = ["READ", "WRITE"] as const;
 export type ApiAccessLevel = (typeof API_ACCESS_LEVELS)[number];
@@ -225,12 +260,19 @@ export const COLUMNS = {
   },
   stock_movements: {
     id: "id", materialId: "material_id", type: "type", quantity: "quantity", movementDate: "movement_date", deliveryId: "delivery_id",
-    poItemId: "po_item_id", clientId: "client_id", reference: "reference", notes: "notes", createdById: "created_by_id", createdAt: "created_at",
+    poItemId: "po_item_id", clientId: "client_id", jobOrderId: "job_order_id", reference: "reference", notes: "notes", createdById: "created_by_id", createdAt: "created_at",
   },
   company_settings: {
-    id: "id", companyName: "company_name", address: "address", phone: "phone", email: "email", tin: "tin", poPrefix: "po_prefix",
+    id: "id", companyName: "company_name", address: "address", phone: "phone", email: "email", tin: "tin", poPrefix: "po_prefix", joPrefix: "jo_prefix",
     defaultTerms: "default_terms", requireApproval: "require_approval", poFooter: "po_footer", showSignatures: "show_signatures",
     stockClearedDeliveryId: "stock_cleared_delivery_id", reportRecipients: "report_recipients", updatedAt: "updated_at",
+  },
+  job_orders: {
+    id: "id", joNumber: "jo_number", clientId: "client_id", joDate: "jo_date", status: "status", reference: "reference", notes: "notes",
+    createdById: "created_by_id", cancelledById: "cancelled_by_id", cancelledAt: "cancelled_at", createdAt: "created_at", updatedAt: "updated_at",
+  },
+  job_order_items: {
+    id: "id", jobOrderId: "job_order_id", materialId: "material_id", description: "description", spec: "spec", unit: "unit", quantity: "quantity", sortOrder: "sort_order",
   },
   api_keys: {
     id: "id", name: "name", keyPrefix: "key_prefix", keyHash: "key_hash", active: "active", expiresAt: "expires_at",

@@ -39,7 +39,7 @@ export default async function ClientHistoryPage({ searchParams }: { searchParams
     params.push(`%${q}%`, `%${q}%`);
   }
   const FROM = `FROM stock_movements sm JOIN materials m ON m.id = sm.material_id JOIN clients c ON c.id = sm.client_id
-                LEFT JOIN users u ON u.id = sm.created_by_id WHERE ${where.join(" AND ")}`;
+                LEFT JOIN users u ON u.id = sm.created_by_id LEFT JOIN job_orders jo ON jo.id = sm.job_order_id WHERE ${where.join(" AND ")}`;
 
   const [clients, totals, count, rows] = await Promise.all([
     query<{ id: number; name: string }>("SELECT id, name FROM clients ORDER BY name"),
@@ -50,9 +50,9 @@ export default async function ClientHistoryPage({ searchParams }: { searchParams
       params,
     ),
     query<{ n: number }>(`SELECT COUNT(*) AS n ${FROM}`, params),
-    query<{ id: number; date: string; clientId: number; clientName: string; materialId: number; name: string; spec: string | null; unit: string; qty: number; reference: string | null; byName: string | null }>(
+    query<{ id: number; date: string; clientId: number; clientName: string; materialId: number; name: string; spec: string | null; unit: string; qty: number; reference: string | null; byName: string | null; jobOrderId: number | null; joNumber: string | null }>(
       `SELECT sm.id, sm.movement_date AS date, c.id AS clientId, c.name AS clientName, m.id AS materialId, m.name, m.spec, m.unit,
-              -sm.quantity AS qty, sm.reference, u.name AS byName
+              -sm.quantity AS qty, sm.reference, u.name AS byName, sm.job_order_id AS jobOrderId, jo.jo_number AS joNumber
        ${FROM} ORDER BY sm.movement_date DESC, sm.id DESC LIMIT ? OFFSET ?`,
       [...params, PER_PAGE, (page - 1) * PER_PAGE],
     ),
@@ -134,7 +134,7 @@ export default async function ClientHistoryPage({ searchParams }: { searchParams
           <Empty>No assignments to show.</Empty>
         ) : (
           <table className="table min-w-[760px]">
-            <thead><tr><th>Date</th><th>Client</th><th>Material</th><th className="num">Qty</th><th>Reference</th><th>By</th></tr></thead>
+            <thead><tr><th>Date</th><th>Client</th><th>Material</th><th className="num">Qty</th><th>Job order / reference</th><th>By</th></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
@@ -142,7 +142,14 @@ export default async function ClientHistoryPage({ searchParams }: { searchParams
                   <td><Link href={`/clients/${r.clientId}`} className="text-brand-700 hover:underline">{r.clientName}</Link></td>
                   <td><Link href={`/inventory/${r.materialId}`} className="text-brand-700 hover:underline">{r.name}</Link>{r.spec && <span className="text-slate-500"> · {r.spec}</span>}</td>
                   <td className="num">{num(r.qty)} {r.unit}</td>
-                  <td>{r.reference ?? "—"}</td>
+                  <td>
+                    {r.jobOrderId ? (
+                      <>
+                        <Link href={`/inventory/job-orders/${r.jobOrderId}`} className="text-brand-700 hover:underline">{r.joNumber}</Link>
+                        {r.reference && r.reference !== r.joNumber && <span className="text-slate-600"> · {r.reference}</span>}
+                      </>
+                    ) : (r.reference ?? "—")}
+                  </td>
                   <td>{r.byName ?? "—"}</td>
                 </tr>
               ))}

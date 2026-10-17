@@ -15,12 +15,15 @@ export async function ClientMaterials({ clientId }: { clientId: number }) {
     qty: number;
     reference: string | null;
     byName: string | null;
+    jobOrderId: number | null;
+    joNumber: string | null;
   }>(
     `SELECT sm.id, sm.movement_date AS movementDate, m.id AS materialId, m.name, m.spec, m.unit, -sm.quantity AS qty,
-            sm.reference, u.name AS byName
+            sm.reference, u.name AS byName, sm.job_order_id AS jobOrderId, jo.jo_number AS joNumber
      FROM stock_movements sm
      JOIN materials m ON m.id = sm.material_id
      LEFT JOIN users u ON u.id = sm.created_by_id
+     LEFT JOIN job_orders jo ON jo.id = sm.job_order_id
      WHERE sm.client_id = ? AND sm.type = 'ISSUE'
      ORDER BY sm.movement_date DESC, sm.id DESC`,
     [clientId],
@@ -36,7 +39,10 @@ export async function ClientMaterials({ clientId }: { clientId: number }) {
     <section className="card mt-6 max-w-3xl overflow-x-auto">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <h2>Materials assigned</h2>
-        <Link href={`/inventory/issue?client=${clientId}`} className="btn btn-sm btn-primary">Assign materials</Link>
+        <div className="flex gap-2">
+          <Link href={`/inventory/job-orders?client=${clientId}`} className="btn btn-sm">Job orders</Link>
+          <Link href={`/inventory/issue?client=${clientId}`} className="btn btn-sm btn-primary">Assign materials</Link>
+        </div>
       </div>
       {rows.length === 0 ? (
         <Empty>Nothing assigned to this client yet.</Empty>
@@ -55,14 +61,21 @@ export async function ClientMaterials({ clientId }: { clientId: number }) {
           </table>
           <div className="border-t border-slate-200 px-4 py-3"><h3 className="text-sm font-semibold">History</h3></div>
           <table className="table">
-            <thead><tr><th>Date</th><th>Material</th><th className="num">Qty</th><th>Reference</th><th>By</th></tr></thead>
+            <thead><tr><th>Date</th><th>Material</th><th className="num">Qty</th><th>Job order / reference</th><th>By</th></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
                   <td className="whitespace-nowrap">{fmtDate(r.movementDate)}</td>
                   <td>{r.name}{r.spec && <span className="text-slate-500"> · {r.spec}</span>}</td>
                   <td className="num">{num(r.qty)} {r.unit}</td>
-                  <td>{r.reference ?? "—"}</td>
+                  <td>
+                    {r.jobOrderId ? (
+                      <>
+                        <Link href={`/inventory/job-orders/${r.jobOrderId}`} className="text-brand-700 hover:underline">{r.joNumber}</Link>
+                        {r.reference && r.reference !== r.joNumber && <span className="text-slate-600"> · {r.reference}</span>}
+                      </>
+                    ) : (r.reference ?? "—")}
+                  </td>
                   <td>{r.byName ?? "—"}</td>
                 </tr>
               ))}
