@@ -19,8 +19,8 @@ export default async function ClientHistoryPage({ searchParams }: { searchParams
   const q = (sp.q ?? "").trim();
   const page = Math.max(1, Math.floor(Number(sp.p)) || 1);
 
-  // Assignments (ISSUE movements) that went to a client, with the filters applied.
-  const where = ["sm.type = 'ISSUE'", "sm.client_id IS NOT NULL"];
+  // Assignments to a client and returns from them (ISSUE / RETURN movements), with the filters applied.
+  const where = ["sm.type IN ('ISSUE', 'RETURN')", "sm.client_id IS NOT NULL"];
   const params: unknown[] = [];
   if (clientId) {
     where.push("sm.client_id = ?");
@@ -45,14 +45,14 @@ export default async function ClientHistoryPage({ searchParams }: { searchParams
     query<{ id: number; name: string }>("SELECT id, name FROM clients ORDER BY name"),
     query<{ clientId: number; clientName: string; materialId: number; name: string; spec: string | null; unit: string; qty: number; times: number; last: string }>(
       `SELECT c.id AS clientId, c.name AS clientName, m.id AS materialId, m.name, m.spec, m.unit,
-              -SUM(sm.quantity) AS qty, COUNT(*) AS times, MAX(sm.movement_date) AS last
-       ${FROM} GROUP BY c.id, m.id ORDER BY c.name, m.name`,
+              -SUM(sm.quantity) AS qty, SUM(sm.type = 'ISSUE') AS times, MAX(sm.movement_date) AS last
+       ${FROM} GROUP BY c.id, m.id HAVING qty <> 0 ORDER BY c.name, m.name`,
       params,
     ),
     query<{ n: number }>(`SELECT COUNT(*) AS n ${FROM}`, params),
-    query<{ id: number; date: string; clientId: number; clientName: string; materialId: number; name: string; spec: string | null; unit: string; qty: number; reference: string | null; byName: string | null; jobOrderId: number | null; joNumber: string | null }>(
+    query<{ id: number; date: string; clientId: number; clientName: string; materialId: number; name: string; spec: string | null; unit: string; qty: number; type: string; reference: string | null; byName: string | null; jobOrderId: number | null; joNumber: string | null }>(
       `SELECT sm.id, sm.movement_date AS date, c.id AS clientId, c.name AS clientName, m.id AS materialId, m.name, m.spec, m.unit,
-              -sm.quantity AS qty, sm.reference, u.name AS byName, sm.job_order_id AS jobOrderId, jo.jo_number AS joNumber
+              -sm.quantity AS qty, sm.type, sm.reference, u.name AS byName, sm.job_order_id AS jobOrderId, jo.jo_number AS joNumber
        ${FROM} ORDER BY sm.movement_date DESC, sm.id DESC LIMIT ? OFFSET ?`,
       [...params, PER_PAGE, (page - 1) * PER_PAGE],
     ),
@@ -76,7 +76,12 @@ export default async function ClientHistoryPage({ searchParams }: { searchParams
         title="Materials by client"
         subtitle="History of materials assigned to each client from Inventory."
         back={{ href: "/inventory", label: "Inventory" }}
-        actions={<Link href={`/inventory/issue${clientId ? `?client=${clientId}` : ""}`} className="btn btn-primary">Assign to client</Link>}
+        actions={
+          <>
+            <Link href={`/inventory/project-cost${clientId ? `?client=${clientId}` : ""}`} className="btn">Project cost</Link>
+            <Link href={`/inventory/issue${clientId ? `?client=${clientId}` : ""}`} className="btn btn-primary">Assign to client</Link>
+          </>
+        }
       />
       <form className="mb-4 flex flex-wrap items-end gap-2">
         <div>
@@ -108,7 +113,7 @@ export default async function ClientHistoryPage({ searchParams }: { searchParams
           <Empty>{filtered ? "Nothing matches these filters." : "No materials have been assigned to clients yet."}</Empty>
         ) : (
           <table className="table min-w-[640px]">
-            <thead><tr><th>Client</th><th>Material</th><th className="num">Total assigned</th><th className="num">Times</th><th>Last</th></tr></thead>
+            <thead><tr><th>Client</th><th>Material</th><th className="num">Net assigned</th><th className="num">Times</th><th>Last</th></tr></thead>
             <tbody>
               {totals.map((t, i) => (
                 <tr key={`${t.clientId}-${t.materialId}`} className={i > 0 && totals[i - 1].clientId !== t.clientId ? "border-t-2 border-slate-200" : ""}>
@@ -141,7 +146,10 @@ export default async function ClientHistoryPage({ searchParams }: { searchParams
                   <td className="whitespace-nowrap">{fmtDate(r.date)}</td>
                   <td><Link href={`/clients/${r.clientId}`} className="text-brand-700 hover:underline">{r.clientName}</Link></td>
                   <td><Link href={`/inventory/${r.materialId}`} className="text-brand-700 hover:underline">{r.name}</Link>{r.spec && <span className="text-slate-500"> · {r.spec}</span>}</td>
-                  <td className="num">{num(r.qty)} {r.unit}</td>
+                  <td className="num">
+                    {r.type === "RETURN" && <span className="mr-1 text-xs text-violet-700">Returned</span>}
+                    {num(r.qty)} {r.unit}
+                  </td>
                   <td>
                     {r.jobOrderId ? (
                       <>

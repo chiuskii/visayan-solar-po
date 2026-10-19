@@ -28,11 +28,13 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
             ? `Approved by ${detail.approvedByName ?? "an approver"}. Saving changes withdraws the approval and sends this PO back for approval.`
             : undefined
         }
+        clients={opts.clients}
         suppliers={opts.suppliers}
         materials={opts.materials}
         bundles={opts.bundles}
         initial={{
           toWarehouse: po.toWarehouse,
+          clientId: po.clientId,
           poDate: po.poDate,
           expectedDate: po.expectedDate ?? "",
           deliveryAddress: po.deliveryAddress ?? "",

@@ -1,6 +1,4 @@
 import Link from "next/link";
-import { clearMovementLog } from "@/app/actions/inventory";
-import { ConfirmButton } from "@/components/client-ui";
 import { MovementRef, MovementType, StockBadge } from "@/components/stock-ui";
 import { Empty, PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
@@ -18,7 +16,7 @@ const FILTERS = [
 ] as const;
 
 export default async function InventoryPage({ searchParams }: { searchParams: Promise<SP> }) {
-  const user = await requireUser();
+  await requireUser();
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
   const show = FILTERS.find((f) => f.value === sp.show)?.value ?? "all";
@@ -40,19 +38,20 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
     <>
       <PageHeader
         title="Inventory"
-        subtitle="Stock on hand in the warehouse. PO deliveries add stock; assigning materials to a client takes them out."
+        subtitle="Stock on hand in the warehouse. Deliveries on warehouse POs add stock; assigning materials to a client takes them out."
         actions={
           <>
             <Link href="/inventory/job-orders" className="btn">Job orders</Link>
             <Link href="/inventory/clients" className="btn">Client history</Link>
+            <Link href="/inventory/project-cost" className="btn">Project cost</Link>
             <Link href="/inventory/report" className="btn">Stock report</Link>
+            <Link href="/inventory/count" className="btn">Stock count</Link>
             <Link href="/inventory/adjust" className="btn">Adjust stock</Link>
             <Link href="/inventory/issue" className="btn btn-primary">Assign to client</Link>
           </>
         }
       />
       {sp.saved === "issue" && <p className="ok-box mb-4">Materials assigned.</p>}
-      {sp.saved === "cleared" && <p className="ok-box mb-4">Movement log cleared. Each material’s stock was kept as an opening balance.</p>}
       <form className="mb-4 flex flex-wrap gap-2">
         <input className="input max-w-xs" name="q" defaultValue={q} placeholder="Search material, spec or category" />
         <select className="input w-auto" name="show" defaultValue={show}>
@@ -100,14 +99,6 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
       <section id="movements" className="card scroll-mt-6 overflow-x-auto">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
           <h2>Recent movements</h2>
-          {user.role === "ADMIN" && recent.total > 0 && (
-            <ConfirmButton
-              action={clearMovementLog}
-              label="Clear log"
-              confirmLabel="Yes, clear the log (stock is kept)"
-              className="btn btn-sm btn-danger"
-            />
-          )}
         </div>
         {recent.rows.length === 0 ? (
           <Empty>No stock movements yet.</Empty>

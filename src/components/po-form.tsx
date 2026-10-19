@@ -16,6 +16,8 @@ export type BundleOpt = {
 
 export type PoFormValues = {
   toWarehouse: boolean;
+  /** The project a direct-to-site order is for. */
+  clientId: number | null;
   poDate: string;
   expectedDate: string;
   deliveryAddress: string;
@@ -29,6 +31,7 @@ export type PoFormValues = {
 export function PoForm({
   action,
   initial,
+  clients,
   suppliers,
   materials,
   bundles,
@@ -39,6 +42,7 @@ export function PoForm({
 }: {
   action: (prev: FormState, fd: FormData) => Promise<FormState>;
   initial: PoFormValues;
+  clients: { id: number; name: string; address: string | null }[];
   suppliers: SupplierOpt[];
   materials: MaterialOpt[];
   bundles: BundleOpt[];
@@ -52,6 +56,8 @@ export function PoForm({
   const [state, onSubmit, pending] = useFormAction<FormState>(action, {});
   const [lines, setLines] = useState<Line[]>(initial.items.length ? initial.items : [blankLine()]);
   const [deliveryAddress, setDeliveryAddress] = useState(initial.deliveryAddress);
+  const [toWarehouse, setToWarehouse] = useState(initial.toWarehouse);
+  const [clientId, setClientId] = useState(initial.clientId ? String(initial.clientId) : "");
   const [terms, setTerms] = useState(initial.terms);
   const [vatRate, setVatRate] = useState(String(initial.vatRate));
   const [discount, setDiscount] = useState(initial.discount ? String(initial.discount) : "");
@@ -124,12 +130,28 @@ export function PoForm({
           <input id="terms" name="terms" className="input" value={terms} onChange={(e) => setTerms(e.target.value)} placeholder="Blank = each supplier’s own terms" />
         </div>
         <label className="flex items-start gap-2 text-sm sm:col-span-2 lg:col-span-4">
-          <input type="checkbox" name="toWarehouse" defaultChecked={initial.toWarehouse} className="mt-0.5" />
+          <input type="checkbox" name="toWarehouse" checked={toWarehouse} onChange={(e) => setToWarehouse(e.target.checked)} className="mt-0.5" />
           <span>
             <b>Deliver to warehouse</b> — received quantities are added to Inventory stock, ready to assign to clients. Untick only for
             orders delivered straight to a site.
           </span>
         </label>
+        {!toWarehouse && (
+          <div className="sm:col-span-2 lg:col-span-4">
+            <label className="label" htmlFor="clientId">Project / client *</label>
+            <select id="clientId" name="clientId" className="input" value={clientId} required
+              onChange={(e) => {
+                setClientId(e.target.value);
+                // Suggest the site address when the delivery address is empty.
+                const c = clients.find((x) => x.id === Number(e.target.value));
+                if (c?.address && !deliveryAddress.trim()) setDeliveryAddress(c.address);
+              }}>
+              <option value="">Choose…</option>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <p className="mt-1 text-xs text-slate-500">This order’s cost is counted in the client’s project cost.</p>
+          </div>
+        )}
         <div className="sm:col-span-2 lg:col-span-4">
           <label className="label" htmlFor="deliveryAddress">Deliver to</label>
           <textarea id="deliveryAddress" name="deliveryAddress" rows={2} className="input" value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} placeholder="Warehouse or site address" />

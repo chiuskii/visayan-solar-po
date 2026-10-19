@@ -6,7 +6,7 @@ import { z } from "zod";
 import { execute, query, queryOne, transaction } from "@/db";
 import { toRow, type StockType } from "@/db/types";
 import { requireAdmin, requireUser } from "@/lib/auth";
-import { assertNoNegativeStock, NegativeStockError, onHandByMaterial, recordAdjustment } from "@/lib/inventory";
+import { assertNoNegativeStock, NegativeStockError, onHandByMaterial, recordAdjustment, recordCount } from "@/lib/inventory";
 import { nextJoNumber } from "@/lib/job-orders";
 import { round2 } from "@/lib/po";
 
@@ -95,39 +95,39 @@ export async function issueStock(_prev: FormState, formData: FormData): Promise<
 }
 
 /**
- * Admin: cancels a job order and puts its materials back in stock. Its movements are removed; any
- * already folded into an opening balance (log cleared since) are returned with an adjustment.
+ * Admin: cancels a job order and puts back in stock whatever is still out on it, as RETURN movements
+ * at the cost it went out at. Nothing is deleted, so the history and the project cost (which nets to
+ * zero) stay correct.
  */
 export async function cancelJobOrder(id: number, _fd: FormData) {
   const user = await requireAdmin();
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila" }).format(new Date());
   await transaction(async (conn) => {
-    const jo = await queryOne<{ joNumber: string; status: string }>(
-      "SELECT jo_number AS joNumber, status FROM job_orders WHERE id = ? FOR UPDATE",
+    const jo = await queryOne<{ joNumber: string; clientId: number | null; status: string }>(
+      "SELECT jo_number AS joNumber, client_id AS clientId, status FROM job_orders WHERE id = ? FOR UPDATE",
       [id],
       conn,
     );
     if (!jo || jo.status === "CANCELLED") return;
-    const items = await query<{ materialId: number | null; quantity: number }>(
-      "SELECT material_id AS materialId, quantity FROM job_order_items WHERE job_order_id = ?",
-      [id],
+    // Still out = what the job order issued, less what has been returned. Based on the job order's
+    // items, so it's right even for job orders whose ISSUE rows were removed by an old log clear.
+    const out = await query<{ materialId: number; qty: number; cost: number | null }>(
+      `SELECT i.material_id AS materialId,
+              SUM(i.quantity) - COALESCE((SELECT SUM(r.quantity) FROM stock_movements r
+                                          WHERE r.job_order_id = ? AND r.material_id = i.material_id AND r.type = 'RETURN'), 0) AS qty,
+              COALESCE((SELECT MAX(x.unit_cost) FROM stock_movements x
+                        WHERE x.job_order_id = ? AND x.material_id = i.material_id AND x.type = 'ISSUE'), m.default_cost) AS cost
+       FROM job_order_items i JOIN materials m ON m.id = i.material_id
+       WHERE i.job_order_id = ?
+       GROUP BY i.material_id, m.default_cost
+       HAVING qty > 0`,
+      [id, id, id],
       conn,
     );
-    const moved = await query<{ materialId: number; qty: number }>(
-      "SELECT material_id AS materialId, -SUM(quantity) AS qty FROM stock_movements WHERE job_order_id = ? GROUP BY material_id",
-      [id],
-      conn,
-    );
-    const stillLogged = new Map(moved.map((m) => [m.materialId, Number(m.qty)]));
-    await execute("DELETE FROM stock_movements WHERE job_order_id = ?", [id], conn);
-    const returns = items
-      .filter((i) => i.materialId !== null)
-      .map((i) => [i.materialId!, round2(i.quantity - (stillLogged.get(i.materialId!) ?? 0))] as const)
-      .filter(([, qty]) => qty > 0);
-    if (returns.length) {
+    if (out.length) {
       await execute(
-        "INSERT INTO stock_movements (material_id, type, quantity, movement_date, reference, notes, created_by_id) VALUES ?",
-        [returns.map(([materialId, qty]) => [materialId, "ADJUST", qty, today, jo.joNumber, `Job order ${jo.joNumber} cancelled`, user.id])],
+        "INSERT INTO stock_movements (material_id, type, quantity, unit_cost, movement_date, client_id, job_order_id, reference, notes, created_by_id) VALUES ?",
+        [out.map((o) => [o.materialId, "RETURN", round2(Number(o.qty)), o.cost, today, jo.clientId, id, jo.joNumber, `Job order ${jo.joNumber} cancelled`, user.id])],
         conn,
       );
     }
@@ -161,6 +161,9 @@ export async function adjustStock(_prev: FormState, formData: FormData): Promise
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Please check the form." };
   const { materialId, mode, movementDate, notes } = parsed.data;
+  if (mode === "change" && user.role !== "ADMIN") {
+    return { error: "Only an admin can add or remove stock. Record a count, or receive it through the PO." };
+  }
   const quantity = round2(parsed.data.quantity);
   if (mode === "set" && quantity < 0) return { error: "A counted quantity can’t be negative." };
 
@@ -171,59 +174,82 @@ export async function adjustStock(_prev: FormState, formData: FormData): Promise
 }
 
 /**
- * Admin: clears the movement log but keeps stock. Every material's current on-hand quantity
- * becomes one "Opening balance" adjustment; all other movements are deleted.
+ * Admin: undoes a mistaken adjustment by adding an opposite ADJUST linked to it, with a reason.
+ * Nothing is deleted. Assignments are undone by cancelling the job order; receipts by fixing the PO delivery.
  */
-export async function clearMovementLog(_fd: FormData) {
+export async function reverseMovement(id: number, materialId: number, formData: FormData) {
   const user = await requireAdmin();
+  const reason = String(formData.get("reason") ?? "").trim().slice(0, 2000);
+  if (!reason) redirect(`/inventory/${materialId}?error=reason`);
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila" }).format(new Date());
-  await transaction(async (conn) => {
-    // Lock the log so nothing is added while it's being replaced.
-    await query("SELECT id FROM stock_movements FOR UPDATE", [], conn);
-    const balances = await query<{ materialId: number; qty: number }>(
-      "SELECT material_id AS materialId, SUM(quantity) AS qty FROM stock_movements GROUP BY material_id HAVING SUM(quantity) <> 0",
-      [],
-      conn,
-    );
-    const lastDelivery = await queryOne<{ id: number | null }>("SELECT MAX(id) AS id FROM deliveries", [], conn);
-    await execute("DELETE FROM stock_movements", [], conn);
-    if (balances.length) {
-      await execute(
-        "INSERT INTO stock_movements (material_id, type, quantity, movement_date, reference, notes, created_by_id) VALUES ?",
-        [balances.map((b) => [b.materialId, "ADJUST", b.qty, today, "Opening balance", `Movement log cleared by ${user.name}`, user.id])],
+  let reversedOk = false;
+  try {
+    reversedOk = await transaction(async (conn) => {
+      const m = await queryOne<{ type: StockType; quantity: number; unitCost: number | null; reversalOfId: number | null; movementDate: string }>(
+        `SELECT type, quantity, unit_cost AS unitCost, reversal_of_id AS reversalOfId, movement_date AS movementDate
+         FROM stock_movements WHERE id = ? AND material_id = ? FOR UPDATE`,
+        [id, materialId],
         conn,
       );
-    }
-    await execute(
-      "UPDATE company_settings SET stock_cleared_delivery_id = GREATEST(stock_cleared_delivery_id, ?) WHERE id = 1",
-      [lastDelivery?.id ?? 0],
-      conn,
-    );
-  });
-  revalidatePath("/inventory");
-  redirect("/inventory?saved=cleared");
-}
-
-/** Removes a mistaken adjustment (or an older assignment without a job order). Receipts are removed by deleting the PO delivery instead. */
-export async function deleteMovement(id: number, materialId: number, _fd: FormData) {
-  await requireAdmin();
-  const m = await queryOne<{ type: StockType; jobOrderId: number | null }>(
-    "SELECT type, job_order_id AS jobOrderId FROM stock_movements WHERE id = ? AND material_id = ?",
-    [id, materialId],
-  );
-  // Assignments belong to a job order: cancel the job order instead, so it and the stock stay in step.
-  if (m?.jobOrderId) redirect(`/inventory/${materialId}?error=job-order`);
-  if (m && m.type !== "RECEIVE") {
-    try {
-      await transaction(async (conn) => {
-        await execute("DELETE FROM stock_movements WHERE id = ?", [id], conn);
-        await assertNoNegativeStock([materialId], conn);
-      });
-    } catch (e) {
-      if (e instanceof NegativeStockError) redirect(`/inventory/${materialId}?error=negative`);
-      throw e;
-    }
+      if (!m || m.type !== "ADJUST" || m.reversalOfId) return false;
+      if (await queryOne("SELECT id FROM stock_movements WHERE reversal_of_id = ?", [id], conn)) return false;
+      await execute(
+        "INSERT INTO stock_movements SET ?",
+        [
+          toRow("stock_movements", {
+            materialId,
+            type: "ADJUST",
+            quantity: -m.quantity,
+            unitCost: m.unitCost,
+            movementDate: today,
+            reversalOfId: id,
+            reference: `Reverses ${m.movementDate} adjustment (${m.quantity > 0 ? "+" : ""}${m.quantity})`,
+            notes: reason,
+            createdById: user.id,
+          }),
+        ],
+        conn,
+      );
+      await assertNoNegativeStock([materialId], conn);
+      return true;
+    });
+  } catch (e) {
+    if (e instanceof NegativeStockError) redirect(`/inventory/${materialId}?error=negative`);
+    throw e;
   }
+  if (!reversedOk) redirect(`/inventory/${materialId}?error=not-reversible`);
   revalidatePath("/inventory");
   revalidatePath(`/inventory/${materialId}`);
+  redirect(`/inventory/${materialId}?saved=reversed`);
+}
+
+const countSchema = z.object({
+  movementDate: dateStr,
+  notes: z.string().trim().min(1, "Enter who counted (and who witnessed it).").max(2000),
+  lines: z
+    .array(z.object({ materialId: z.number().int().positive(), counted: z.number().min(0, "A counted quantity can’t be negative.") }))
+    .min(1, "Enter the counted quantity for at least one material.")
+    .max(5000),
+});
+
+/** Saves a stock count sheet: sets each counted material to what was counted. Staff may do this. */
+export async function saveStockCount(_prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  let lines: unknown = [];
+  try {
+    lines = JSON.parse(String(formData.get("lines") ?? "[]"));
+  } catch {
+    lines = [];
+  }
+  const parsed = countSchema.safeParse({ movementDate: formData.get("movementDate") ?? "", notes: formData.get("notes") ?? "", lines });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Please check the count." };
+  const res = await recordCount({
+    lines: parsed.data.lines.map((l) => ({ materialId: l.materialId, counted: round2(l.counted) })),
+    movementDate: parsed.data.movementDate,
+    notes: parsed.data.notes,
+    createdById: user.id,
+  });
+  if ("error" in res) return { error: res.error };
+  revalidatePath("/inventory");
+  redirect(`/inventory/count?counted=${res.counted}&adjusted=${res.adjusted}`);
 }

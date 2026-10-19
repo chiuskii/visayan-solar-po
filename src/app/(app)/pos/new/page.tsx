@@ -18,12 +18,14 @@ export default async function NewPoPage() {
         isEdit={false}
         cancelHref="/pos"
         requireApproval={settings.requireApproval && user.role !== "ADMIN"}
+        clients={opts.clients}
         suppliers={opts.suppliers}
         materials={opts.materials}
         bundles={opts.bundles}
         initial={{
           // Orders go to the warehouse by default; materials are assigned to clients from Inventory.
           toWarehouse: true,
+          clientId: null,
           poDate: todayPH(),
           expectedDate: "",
           deliveryAddress: settings.address ?? "",

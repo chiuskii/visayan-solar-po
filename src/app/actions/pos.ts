@@ -60,10 +60,16 @@ function parsePoForm(formData: FormData) {
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Please check the form." } as const;
   const d = parsed.data;
+  const toWarehouse = formData.get("toWarehouse") === "on";
+  // Direct-to-site orders are for one project (client), so their cost shows in its project cost.
+  // Warehouse orders leave the field alone (undefined): materials are assigned to clients from Inventory.
+  const clientId = toWarehouse ? undefined : Number(formData.get("clientId")) || null;
+  if (!toWarehouse && !clientId) return { error: "Choose the project / client this direct-to-site order is for." } as const;
   return {
     data: {
       ...d,
-      toWarehouse: formData.get("toWarehouse") === "on",
+      toWarehouse,
+      clientId,
       discount: round2(d.discount),
       items: d.items.map((it, i) => ({
         ...it,
@@ -75,6 +81,12 @@ function parsePoForm(formData: FormData) {
       })),
     },
   } as const;
+}
+
+/** Error message if the PO's project / client no longer exists. */
+async function checkClient(clientId: number | null | undefined) {
+  if (!clientId) return null;
+  return (await queryOne("SELECT id FROM clients WHERE id = ?", [clientId])) ? null : "That client no longer exists. Pick another.";
 }
 
 /** Error message if any line points at a supplier that no longer exists. */
@@ -89,7 +101,7 @@ export async function createPo(_prev: FormState, formData: FormData): Promise<Fo
   const parsed = parsePoForm(formData);
   if ("error" in parsed) return { error: parsed.error };
   const { items, ...header } = parsed.data;
-  const supplierError = await checkSuppliers(items);
+  const supplierError = (await checkSuppliers(items)) ?? (await checkClient(header.clientId));
   if (supplierError) return { error: supplierError };
   // "order" submits it: straight to ORDERED, or to PENDING when approval is required.
   // An admin's PO is approved in their name as it's submitted.
@@ -137,7 +149,7 @@ export async function updatePo(poId: number, _prev: FormState, formData: FormDat
   const parsed = parsePoForm(formData);
   if ("error" in parsed) return { error: parsed.error };
   const { items, ...header } = parsed.data;
-  const supplierError = await checkSuppliers(items);
+  const supplierError = (await checkSuppliers(items)) ?? (await checkClient(header.clientId));
   if (supplierError) return { error: supplierError };
 
   const po = await queryOne<{ status: PoStatus; approvedById: number | null }>(

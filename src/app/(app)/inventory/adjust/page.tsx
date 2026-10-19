@@ -8,17 +8,17 @@ import { listStock } from "@/lib/inventory";
 export const metadata = { title: "Adjust stock" };
 
 export default async function AdjustPage({ searchParams }: { searchParams: Promise<{ material?: string }> }) {
-  await requireUser();
+  const user = await requireUser();
   const { material } = await searchParams;
   const stock = await listStock();
   return (
     <>
       <PageHeader
         title="Adjust stock"
-        subtitle="For physical counts, opening stock, damage or corrections."
+        subtitle={user.role === "ADMIN" ? "For physical counts, damage or corrections." : "Record a physical count."}
         back={{ href: "/inventory", label: "Inventory" }}
       />
-      <AdjustForm action={adjustStock} materials={stock} initialMaterialId={Number(material) || undefined} today={todayPH()} />
+      <AdjustForm action={adjustStock} materials={stock} initialMaterialId={Number(material) || undefined} today={todayPH()} canChange={user.role === "ADMIN"} />
     </>
   );
 }

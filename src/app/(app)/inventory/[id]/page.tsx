@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { deleteMovement } from "@/app/actions/inventory";
-import { ConfirmButton } from "@/components/client-ui";
+import { reverseMovement } from "@/app/actions/inventory";
 import { MovementRef, MovementType, StockBadge } from "@/components/stock-ui";
 import { Empty, PageHeader } from "@/components/ui";
 import { queryOne } from "@/db";
@@ -28,6 +27,8 @@ export default async function StockHistoryPage({
   );
   if (!m) notFound();
   const ledger = await materialLedger(id);
+  // Movements that a later adjustment has reversed.
+  const reversed = new Set(ledger.map((r) => r.reversalOfId).filter((x): x is number => x !== null));
   const onHand = ledger[0]?.balance ?? 0;
   const lastMovement = ledger[0]?.movementDate ?? null;
 
@@ -45,8 +46,10 @@ export default async function StockHistoryPage({
         }
       />
       {saved === "adjust" && <p className="ok-box mb-4">Adjustment saved.</p>}
-      {error === "job-order" && <p className="error-box mb-4">That assignment belongs to a job order. Cancel the job order instead.</p>}
-      {error === "negative" && <p className="error-box mb-4">Removing that would leave stock below zero, so it was kept.</p>}
+      {saved === "reversed" && <p className="ok-box mb-4">Adjustment reversed. Both entries stay in the history.</p>}
+      {error === "not-reversible" && <p className="error-box mb-4">Only an adjustment that hasn’t been reversed can be reversed. Assignments are undone by cancelling the job order.</p>}
+      {error === "reason" && <p className="error-box mb-4">Give a reason for the reversal.</p>}
+      {error === "negative" && <p className="error-box mb-4">Reversing that would leave stock below zero, so it was not reversed.</p>}
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="card p-4">
           <div className="text-xs text-slate-500">On hand</div>
@@ -86,8 +89,20 @@ export default async function StockHistoryPage({
                   <td className="max-w-xs text-slate-600">{r.notes ?? ""}</td>
                   <td className="whitespace-nowrap">{r.byName ?? "—"}</td>
                   <td>
-                    {user.role === "ADMIN" && r.type !== "RECEIVE" && !r.jobOrderId && (
-                      <ConfirmButton action={deleteMovement.bind(null, r.id, id)} label="Remove" confirmLabel="Remove" className="btn btn-sm btn-danger" />
+                    {reversed.has(r.id) ? (
+                      <span className="text-xs text-slate-500">Reversed</span>
+                    ) : (
+                      user.role === "ADMIN" && r.type === "ADJUST" && !r.reversalOfId && (
+                        <details className="relative">
+                          <summary className="btn btn-sm cursor-pointer list-none">Reverse</summary>
+                          <form action={reverseMovement.bind(null, r.id, id)} className="absolute right-0 z-10 mt-1 w-72 space-y-2 rounded-md border border-slate-200 bg-white p-3 shadow-lg">
+                            <label className="label" htmlFor={`reason-${r.id}`}>Reason *</label>
+                            <input id={`reason-${r.id}`} name="reason" className="input" required maxLength={2000} placeholder="e.g. entered twice, wrong material" />
+                            <p className="text-xs text-slate-500">Adds an opposite adjustment. The original stays in the history.</p>
+                            <button className="btn btn-sm btn-danger">Reverse adjustment</button>
+                          </form>
+                        </details>
+                      )
                     )}
                   </td>
                 </tr>

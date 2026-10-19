@@ -67,7 +67,7 @@ export default async function ApiKeysPage({ searchParams }: { searchParams: Prom
           <li>GET /api/v1/purchase-orders?status=&amp;from=&amp;to=&amp;search= · GET /api/v1/purchase-orders/&#123;id or PO number&#125;</li>
           <li>GET /api/v1/inventory?search=&amp;filter=all|stock|low · GET /api/v1/inventory/&#123;materialId&#125;</li>
           <li>GET /api/v1/job-orders?client=&amp;status=&amp;from=&amp;to=&amp;search= · GET /api/v1/job-orders/&#123;id or JO number&#125;</li>
-          <li>POST /api/v1/inventory/adjustments &#123; materialId, mode: &quot;set&quot;|&quot;change&quot;, quantity, notes, date? &#125;</li>
+          <li>POST /api/v1/inventory/adjustments &#123; materialId, mode: &quot;set&quot;, quantity, notes, date? &#125; (counts only)</li>
           <li>GET · POST /api/v1/materials | suppliers | clients — GET · PATCH /api/v1/&lt;list&gt;/&#123;id&#125;</li>
           <li>GET /api/v1/bundles · GET /api/v1/bundles/&#123;id&#125;</li>
         </ul>

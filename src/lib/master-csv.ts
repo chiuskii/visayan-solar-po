@@ -6,12 +6,17 @@ import { toCsv } from "./csv";
 import { todayPH } from "./format";
 import { csvColumn, MASTERS, type MasterKey } from "./masters";
 
-/** CSV download of a master list: `id` plus every form field. `?template=1` returns just the header row. */
+/**
+ * CSV download of a master list: `id` plus every form field. `?template=1` returns just the header row;
+ * `?missing-cost=1` (materials) only the materials with no default cost, to fill in and import back.
+ */
 export async function exportMasterCsv(entity: MasterKey, req: Request) {
   if (!(await getCurrentUser())) return new Response("Sign in first.", { status: 401 });
   const cfg = MASTERS[entity];
   const header = ["id", ...cfg.fields.map(csvColumn)];
-  const template = new URL(req.url).searchParams.has("template");
+  const params = new URL(req.url).searchParams;
+  const template = params.has("template");
+  const missingCost = entity === "materials" && params.has("missing-cost");
 
   let rows: Record<string, unknown>[] = [];
   if (!template) {
@@ -21,6 +26,7 @@ export async function exportMasterCsv(entity: MasterKey, req: Request) {
       `SELECT ${cols(entity, "t")}${supplierField ? ", s.name AS __supplierName" : ""}
        FROM ${entity} t
        ${supplierField ? `LEFT JOIN suppliers s ON s.id = t.${(COLUMNS[entity] as Record<string, string>)[supplierField.name]}` : ""}
+       ${missingCost ? "WHERE t.default_cost = 0" : ""}
        ORDER BY t.name, t.id`,
     );
   }
@@ -31,7 +37,7 @@ export async function exportMasterCsv(entity: MasterKey, req: Request) {
       ...cfg.fields.map((f) => (f.type === "supplier" ? (r.__supplierName as string | null) : (r[f.name] as string | number | null))),
     ]),
   ]);
-  const name = template ? `${entity}-template.csv` : `${entity}-${todayPH()}.csv`;
+  const name = template ? `${entity}-template.csv` : `${entity}${missingCost ? "-missing-cost" : ""}-${todayPH()}.csv`;
   return new Response(body, {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",

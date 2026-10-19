@@ -39,8 +39,10 @@ export async function assertNoNegativeStock(materialIds: number[], conn: PoolCon
 /**
  * Rebuilds the stock receipts for a PO's deliveries: removes them, then — if the PO is
  * delivered to the warehouse — adds one RECEIVE movement per delivered line that is linked
- * to a material. Call after recording deliveries or editing the PO.
- * Deliveries from before the last log clear are skipped: they're already in the opening balances.
+ * to a material, at the PO line's unit price. Call after recording deliveries or editing the PO.
+ * Deliveries up to company_settings.stock_cleared_delivery_id are skipped: they're from before
+ * stock came in through PO receiving (see scripts/one-time/po-receiving-cutover.sql), and the
+ * stock count after the cutover already includes them.
  */
 export async function syncPoStock(poId: number, conn?: PoolConnection) {
   const c = conn ?? getPool();
@@ -53,8 +55,8 @@ export async function syncPoStock(poId: number, conn?: PoolConnection) {
     c,
   );
   await execute(
-    `INSERT INTO stock_movements (material_id, type, quantity, movement_date, delivery_id, po_item_id, reference, created_by_id)
-     SELECT pi.material_id, 'RECEIVE', di.quantity, d.delivery_date, d.id, pi.id,
+    `INSERT INTO stock_movements (material_id, type, quantity, unit_cost, movement_date, delivery_id, po_item_id, reference, created_by_id)
+     SELECT pi.material_id, 'RECEIVE', di.quantity, pi.unit_cost, d.delivery_date, d.id, pi.id,
             LEFT(CONCAT(po.po_number, IF(d.dr_number IS NULL, '', CONCAT(' · DR ', d.dr_number))), 120), d.created_by_id
      FROM delivery_items di
      JOIN deliveries d ON d.id = di.delivery_id
@@ -116,8 +118,8 @@ export type MovementRow = StockMovement & {
 };
 
 const MOVEMENT_SELECT = `
-  SELECT sm.id, sm.material_id AS materialId, sm.type, sm.quantity, sm.movement_date AS movementDate,
-         sm.delivery_id AS deliveryId, sm.po_item_id AS poItemId, sm.client_id AS clientId, sm.job_order_id AS jobOrderId, sm.reference, sm.notes,
+  SELECT sm.id, sm.material_id AS materialId, sm.type, sm.quantity, sm.unit_cost AS unitCost, sm.movement_date AS movementDate,
+         sm.delivery_id AS deliveryId, sm.po_item_id AS poItemId, sm.client_id AS clientId, sm.job_order_id AS jobOrderId, sm.reversal_of_id AS reversalOfId, sm.reference, sm.notes,
          sm.created_by_id AS createdById, sm.created_at AS createdAt,
          m.name AS materialName, m.unit AS materialUnit, c.name AS clientName, u.name AS byName, d.po_id AS poId, jo.jo_number AS joNumber
   FROM stock_movements sm
@@ -185,5 +187,36 @@ export async function recordAdjustment(a: {
       conn,
     );
     return null;
+  });
+}
+
+/**
+ * Records a stock count for several materials at once: each counted material gets an ADJUST that
+ * brings on hand to the counted quantity (none when it already matches). One transaction, with the
+ * materials locked, so nothing moves while the count is saved.
+ */
+export async function recordCount(c: {
+  lines: { materialId: number; counted: number }[];
+  movementDate: string;
+  notes: string;
+  createdById: number;
+}) {
+  const ids = [...new Set(c.lines.map((l) => l.materialId))];
+  if (ids.length !== c.lines.length) return { error: "A material is listed twice." } as const;
+  return transaction(async (conn) => {
+    const mats = await query<{ id: number }>("SELECT id FROM materials WHERE id IN (?) FOR UPDATE", [ids], conn);
+    if (mats.length !== ids.length) return { error: "One of the materials no longer exists. Reload the page." } as const;
+    const onHand = await onHandByMaterial(ids, conn);
+    const rows = c.lines
+      .map((l) => ({ ...l, diff: Math.round((l.counted - (onHand.get(l.materialId) ?? 0)) * 100) / 100 }))
+      .filter((l) => l.diff !== 0);
+    if (rows.length) {
+      await execute(
+        "INSERT INTO stock_movements (material_id, type, quantity, movement_date, reference, notes, created_by_id) VALUES ?",
+        [rows.map((l) => [l.materialId, "ADJUST", l.diff, c.movementDate, `Count: ${l.counted}`, c.notes, c.createdById])],
+        conn,
+      );
+    }
+    return { counted: c.lines.length, adjusted: rows.length } as const;
   });
 }

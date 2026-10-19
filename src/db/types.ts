@@ -132,7 +132,7 @@ export type BundleItem = {
   sortOrder: number;
 };
 
-export const STOCK_TYPES = ["RECEIVE", "ISSUE", "ADJUST"] as const;
+export const STOCK_TYPES = ["RECEIVE", "ISSUE", "RETURN", "ADJUST"] as const;
 export type StockType = (typeof STOCK_TYPES)[number];
 
 export type StockMovement = {
@@ -141,12 +141,16 @@ export type StockMovement = {
   type: StockType;
   /** Positive adds to stock, negative takes from it. */
   quantity: number;
+  /** Cost per unit when it moved: PO price for receipts, the issue cost for returns. */
+  unitCost: number | null;
   movementDate: string;
   deliveryId: number | null;
   poItemId: number | null;
   clientId: number | null;
   /** The job order an ISSUE movement belongs to. */
   jobOrderId: number | null;
+  /** Set on an ADJUST that reverses (undoes) another movement. */
+  reversalOfId: number | null;
   reference: string | null;
   notes: string | null;
   createdById: number | null;
@@ -164,6 +168,8 @@ export type JobOrder = {
   joDate: string;
   status: JoStatus;
   reference: string | null;
+  /** Who took the materials (e.g. the team lead). */
+  receivedBy: string | null;
   notes: string | null;
   createdById: number | null;
   cancelledById: number | null;
@@ -259,8 +265,8 @@ export const COLUMNS = {
     unit: "unit", quantity: "quantity", unitCost: "unit_cost", sortOrder: "sort_order",
   },
   stock_movements: {
-    id: "id", materialId: "material_id", type: "type", quantity: "quantity", movementDate: "movement_date", deliveryId: "delivery_id",
-    poItemId: "po_item_id", clientId: "client_id", jobOrderId: "job_order_id", reference: "reference", notes: "notes", createdById: "created_by_id", createdAt: "created_at",
+    id: "id", materialId: "material_id", type: "type", quantity: "quantity", unitCost: "unit_cost", movementDate: "movement_date", deliveryId: "delivery_id",
+    poItemId: "po_item_id", clientId: "client_id", jobOrderId: "job_order_id", reversalOfId: "reversal_of_id", reference: "reference", notes: "notes", createdById: "created_by_id", createdAt: "created_at",
   },
   company_settings: {
     id: "id", companyName: "company_name", address: "address", phone: "phone", email: "email", tin: "tin", poPrefix: "po_prefix", joPrefix: "jo_prefix",
@@ -268,8 +274,8 @@ export const COLUMNS = {
     stockClearedDeliveryId: "stock_cleared_delivery_id", reportRecipients: "report_recipients", updatedAt: "updated_at",
   },
   job_orders: {
-    id: "id", joNumber: "jo_number", clientId: "client_id", joDate: "jo_date", status: "status", reference: "reference", notes: "notes",
-    createdById: "created_by_id", cancelledById: "cancelled_by_id", cancelledAt: "cancelled_at", createdAt: "created_at", updatedAt: "updated_at",
+    id: "id", joNumber: "jo_number", clientId: "client_id", joDate: "jo_date", status: "status", reference: "reference", receivedBy: "received_by",
+    notes: "notes", createdById: "created_by_id", cancelledById: "cancelled_by_id", cancelledAt: "cancelled_at", createdAt: "created_at", updatedAt: "updated_at",
   },
   job_order_items: {
     id: "id", jobOrderId: "job_order_id", materialId: "material_id", description: "description", spec: "spec", unit: "unit", quantity: "quantity", sortOrder: "sort_order",

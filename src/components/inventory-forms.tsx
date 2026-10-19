@@ -179,11 +179,14 @@ export function AdjustForm({
   materials,
   initialMaterialId,
   today,
+  canChange,
 }: {
   action: (prev: FormState, fd: FormData) => Promise<FormState>;
   materials: StockOpt[];
   initialMaterialId?: number;
   today: string;
+  /** Admins may also add / remove stock; staff record counts only. */
+  canChange: boolean;
 }) {
   const [state, onSubmit, pending] = useFormAction<FormState>(action, {});
   const [materialId, setMaterialId] = useState(initialMaterialId ? String(initialMaterialId) : "");
@@ -203,14 +206,21 @@ export function AdjustForm({
           ))}
         </select>
       </div>
-      <fieldset className="flex flex-wrap gap-4 text-sm">
-        <label className="flex items-center gap-2">
-          <input type="radio" name="mode" value="set" checked={mode === "set"} onChange={() => setMode("set")} /> Set to counted quantity
-        </label>
-        <label className="flex items-center gap-2">
-          <input type="radio" name="mode" value="change" checked={mode === "change"} onChange={() => setMode("change")} /> Add / remove (use − to remove)
-        </label>
-      </fieldset>
+      {canChange ? (
+        <fieldset className="flex flex-wrap gap-4 text-sm">
+          <label className="flex items-center gap-2">
+            <input type="radio" name="mode" value="set" checked={mode === "set"} onChange={() => setMode("set")} /> Set to counted quantity
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="radio" name="mode" value="change" checked={mode === "change"} onChange={() => setMode("change")} /> Add / remove (use − to remove)
+          </label>
+        </fieldset>
+      ) : (
+        <>
+          <input type="hidden" name="mode" value="set" />
+          <p className="text-sm text-slate-600">Record what you counted. New stock comes in through PO deliveries; only an admin can add or remove stock directly.</p>
+        </>
+      )}
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label className="label" htmlFor="quantity">{mode === "set" ? "Counted quantity *" : "Change (+ / −) *"}</label>

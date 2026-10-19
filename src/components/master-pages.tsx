@@ -31,6 +31,9 @@ export async function MasterListPage({ entity, q, updated }: { entity: MasterKey
      LIMIT 500`,
     search ? [`%${search}%`] : [],
   );
+  // Materials with no cost can't be costed on job orders or the project cost report.
+  const noCost =
+    entity === "materials" ? Number((await query<{ n: number }>("SELECT COUNT(*) AS n FROM materials WHERE default_cost = 0"))[0]?.n ?? 0) : 0;
 
   const listTable = (
     <div className="card overflow-x-auto">
@@ -101,6 +104,13 @@ export async function MasterListPage({ entity, q, updated }: { entity: MasterKey
       {updated && (
         <p className="ok-box mb-4">
           Updated {Number(updated)} {Number(updated) === 1 ? cfg.singular.toLowerCase() : cfg.title.toLowerCase()}.
+        </p>
+      )}
+      {noCost > 0 && (
+        <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <b>{noCost} material{noCost === 1 ? " has" : "s have"} no default cost (₱0).</b>{" "}
+          <a href="/materials/export?missing-cost=1" className="font-medium underline">Export them</a>, fill in the default_cost column, then{" "}
+          <Link href="/materials/import" className="font-medium underline">import the file</Link>.
         </p>
       )}
       <form className="mb-4 flex max-w-md gap-2">

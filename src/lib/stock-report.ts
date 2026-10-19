@@ -49,7 +49,7 @@ export async function gatherStockReport(): Promise<StockReportData> {
     ),
     query<{ materialId: number; qty: number }>(
       `SELECT material_id AS materialId, -SUM(quantity) AS qty FROM stock_movements
-       WHERE type = 'ISSUE' AND movement_date >= CURDATE() - INTERVAL 30 DAY GROUP BY material_id`,
+       WHERE type IN ('ISSUE', 'RETURN') AND movement_date >= CURDATE() - INTERVAL 30 DAY GROUP BY material_id`,
     ),
     // Preferred supplier: the material's default, else the supplier on its latest PO line; plus that line's price.
     query<{ materialId: number; supplier: string | null; lastCost: number | null }>(

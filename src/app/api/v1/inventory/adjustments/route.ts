@@ -6,14 +6,15 @@ export const dynamic = "force-dynamic";
 
 const schema = z.object({
   materialId: z.number().int().positive(),
-  mode: z.enum(["set", "change"]),
+  // Counts only, as for staff: stock comes in through PO deliveries.
+  mode: z.literal("set", { error: "mode must be \"set\" (a count). Adding or removing stock is admin-only in the app." }),
   quantity: z.number().refine(Number.isFinite),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be like 2026-01-31").optional(),
   notes: z.string().trim().min(1, "notes is required (the reason for the adjustment)").max(1900),
 });
 
 /**
- * Records a stock adjustment. Body: { materialId, mode: "set" (a count) | "change" (+/- amount), quantity, notes, date? }.
+ * Records a stock count. Body: { materialId, mode: "set", quantity, notes, date? }.
  * The movement is noted as made through this API key.
  */
 export const POST = apiRoute("inventory", "WRITE", async (req, caller) => {
