@@ -26,6 +26,8 @@ export default async function PrintJobOrderPage({ params, searchParams }: { para
       ? ((await queryOne<{ signature: string | null }>("SELECT signature FROM users WHERE id = ?", [jo.createdById]))?.signature ?? null)
       : null;
   const client = jo.client;
+  // Once materials have been removed (returned), print issued / returned / net per material.
+  const hasReturns = jo.materials.some((m) => m.returned > 0);
 
   return (
     <div className="min-h-screen bg-slate-100 py-6 print:bg-white print:py-0">
@@ -81,21 +83,41 @@ export default async function PrintJobOrderPage({ params, searchParams }: { para
             <tr className="bg-brand-600 text-left text-white">
               <th className="px-2 py-1.5 font-semibold">#</th>
               <th className="px-2 py-1.5 font-semibold">Material</th>
-              <th className="px-2 py-1.5 text-right font-semibold">Qty</th>
+              {hasReturns ? (
+                <>
+                  <th className="px-2 py-1.5 text-right font-semibold">Issued</th>
+                  <th className="px-2 py-1.5 text-right font-semibold">Returned</th>
+                  <th className="px-2 py-1.5 text-right font-semibold">Net</th>
+                </>
+              ) : (
+                <th className="px-2 py-1.5 text-right font-semibold">Qty</th>
+              )}
               <th className="px-2 py-1.5 font-semibold">Unit</th>
               <th className="w-28 px-2 py-1.5 font-semibold">Remarks</th>
             </tr>
           </thead>
           <tbody>
-            {jo.items.map((i, n) => (
-              <tr key={i.id} className="border-b border-slate-200 align-top">
-                <td className="px-2 py-1.5 text-slate-500">{n + 1}</td>
-                <td className="px-2 py-1.5">{i.description}{i.spec && <span className="text-slate-600"> — {i.spec}</span>}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums">{num(i.quantity)}</td>
-                <td className="px-2 py-1.5">{i.unit}</td>
-                <td className="px-2 py-1.5"></td>
-              </tr>
-            ))}
+            {hasReturns
+              ? jo.materials.map((m, n) => (
+                  <tr key={m.materialId} className="border-b border-slate-200 align-top">
+                    <td className="px-2 py-1.5 text-slate-500">{n + 1}</td>
+                    <td className="px-2 py-1.5">{m.description}{m.spec && <span className="text-slate-600"> — {m.spec}</span>}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{num(m.issued)}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{m.returned ? num(m.returned) : "—"}</td>
+                    <td className="px-2 py-1.5 text-right font-semibold tabular-nums">{num(m.out)}</td>
+                    <td className="px-2 py-1.5">{m.unit}</td>
+                    <td className="px-2 py-1.5"></td>
+                  </tr>
+                ))
+              : jo.items.map((i, n) => (
+                  <tr key={i.id} className="border-b border-slate-200 align-top">
+                    <td className="px-2 py-1.5 text-slate-500">{n + 1}</td>
+                    <td className="px-2 py-1.5">{i.description}{i.spec && <span className="text-slate-600"> — {i.spec}</span>}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{num(i.quantity)}</td>
+                    <td className="px-2 py-1.5">{i.unit}</td>
+                    <td className="px-2 py-1.5"></td>
+                  </tr>
+                ))}
           </tbody>
         </table>
 

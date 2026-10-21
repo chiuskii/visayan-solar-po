@@ -2,15 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import type { PoolConnection } from "mysql2/promise";
 import { z } from "zod";
 import { execute, query, queryOne, transaction } from "@/db";
 import { toRow, type StockType } from "@/db/types";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { assertNoNegativeStock, NegativeStockError, onHandByMaterial, recordAdjustment, recordCount } from "@/lib/inventory";
-import { nextJoNumber } from "@/lib/job-orders";
+import { jobOrderMaterials, nextJoNumber } from "@/lib/job-orders";
 import { round2 } from "@/lib/po";
 
-export type FormState = { error?: string };
+export type FormState = { error?: string; ok?: string };
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter the date.");
 const optText = (max: number) =>
@@ -20,55 +21,70 @@ const optText = (max: number) =>
     .max(max)
     .transform((v) => v || null);
 
-const issueSchema = z.object({
-  clientId: z.union([z.literal(""), z.coerce.number().int().positive()]).transform((v) => (v === "" ? null : v)),
-  movementDate: dateStr,
-  reference: optText(120),
-  notes: optText(2000),
-  lines: z
-    .array(z.object({ materialId: z.number().int().positive("Pick a material on each line."), quantity: z.number().positive("Quantity must be more than 0.") }))
-    .min(1, "Add at least one material."),
-});
+const linesSchema = z
+  .array(z.object({ materialId: z.number().int().positive("Pick a material on each line."), quantity: z.number().positive("Quantity must be more than 0.") }))
+  .min(1, "Add at least one material.");
+
+function readLines(formData: FormData): unknown {
+  try {
+    return JSON.parse(String(formData.get("lines") ?? "[]"));
+  } catch {
+    return [];
+  }
+}
+
+/** Same material on two lines → one total. */
+function totalsOf(lines: { materialId: number; quantity: number }[]) {
+  const totals = new Map<number, number>();
+  for (const l of lines) totals.set(l.materialId, round2((totals.get(l.materialId) ?? 0) + l.quantity));
+  return totals;
+}
+
+type LockedMaterial = { id: number; name: string; spec: string | null; unit: string };
+
+/**
+ * Locks the materials (so two people issuing at once can't take the same stock) and checks there's
+ * enough on hand. Returns them, or an error message.
+ */
+async function lockStock(totals: Map<number, number>, conn: PoolConnection): Promise<{ error: string } | { mats: Map<number, LockedMaterial> }> {
+  const ids = [...totals.keys()];
+  const mats = await query<LockedMaterial>("SELECT id, name, spec, unit FROM materials WHERE id IN (?) FOR UPDATE", [ids], conn);
+  if (mats.length !== ids.length) return { error: "One of the materials no longer exists." };
+  const onHand = await onHandByMaterial(ids, conn);
+  for (const m of mats) {
+    const have = onHand.get(m.id) ?? 0;
+    if (totals.get(m.id)! > have) return { error: `Only ${have} ${m.unit} of “${m.name}” on hand.` };
+  }
+  return { mats: new Map(mats.map((m) => [m.id, m])) };
+}
 
 /** Takes materials out of stock for a client / project. Refuses to go below what's on hand. */
 export async function issueStock(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
-  let lines: unknown = [];
-  try {
-    lines = JSON.parse(String(formData.get("lines") ?? "[]"));
-  } catch {
-    lines = [];
-  }
-  const parsed = issueSchema.safeParse({
-    clientId: formData.get("clientId") ?? "",
-    movementDate: formData.get("movementDate") ?? "",
-    reference: formData.get("reference") ?? "",
-    notes: formData.get("notes") ?? "",
-    lines,
-  });
+  const parsed = z
+    .object({
+      clientId: z.union([z.literal(""), z.coerce.number().int().positive()]).transform((v) => (v === "" ? null : v)),
+      movementDate: dateStr,
+      reference: optText(120),
+      notes: optText(2000),
+      lines: linesSchema,
+    })
+    .safeParse({
+      clientId: formData.get("clientId") ?? "",
+      movementDate: formData.get("movementDate") ?? "",
+      reference: formData.get("reference") ?? "",
+      notes: formData.get("notes") ?? "",
+      lines: readLines(formData),
+    });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Please check the form." };
   const { clientId, movementDate, reference, notes } = parsed.data;
   if (!clientId && !reference) return { error: "Choose the client/project, or enter a reference for where it went." };
-
-  // Same material on two lines → one total.
-  const totals = new Map<number, number>();
-  for (const l of parsed.data.lines) totals.set(l.materialId, round2((totals.get(l.materialId) ?? 0) + l.quantity));
+  const totals = totalsOf(parsed.data.lines);
 
   // Creates the job order and its stock movements together; returns its id, or an error message.
   const result = await transaction(async (conn): Promise<{ error: string } | { joId: number }> => {
-    const ids = [...totals.keys()];
-    // Lock the materials so two people issuing at once can't take the same stock.
-    const mats = await query<{ id: number; name: string; spec: string | null; unit: string }>(
-      "SELECT id, name, spec, unit FROM materials WHERE id IN (?) FOR UPDATE",
-      [ids],
-      conn,
-    );
-    if (mats.length !== ids.length) return { error: "One of the materials no longer exists." };
-    const onHand = await onHandByMaterial(ids, conn);
-    for (const m of mats) {
-      const have = onHand.get(m.id) ?? 0;
-      if (totals.get(m.id)! > have) return { error: `Only ${have} ${m.unit} of “${m.name}” on hand.` };
-    }
+    const locked = await lockStock(totals, conn);
+    if ("error" in locked) return locked;
     const joNumber = await nextJoNumber(movementDate, conn);
     const jo = await execute(
       "INSERT INTO job_orders SET ?",
@@ -76,10 +92,12 @@ export async function issueStock(_prev: FormState, formData: FormData): Promise<
       conn,
     );
     const joId = jo.insertId;
-    const byId = new Map(mats.map((m) => [m.id, m]));
     await execute(
       "INSERT INTO job_order_items (job_order_id, material_id, description, spec, unit, quantity, sort_order) VALUES ?",
-      [[...totals].map(([materialId, qty], n) => [joId, materialId, byId.get(materialId)!.name, byId.get(materialId)!.spec, byId.get(materialId)!.unit, qty, n])],
+      [[...totals].map(([materialId, qty], n) => {
+        const m = locked.mats.get(materialId)!;
+        return [joId, materialId, m.name, m.spec, m.unit, qty, n];
+      })],
       conn,
     );
     await execute(
@@ -92,6 +110,163 @@ export async function issueStock(_prev: FormState, formData: FormData): Promise<
   if ("error" in result) return { error: result.error };
   revalidatePath("/inventory");
   redirect(`/inventory/job-orders/${result.joId}?saved=created`);
+}
+
+/** Adds more materials to an existing job order: out of stock, onto the same job order and client. */
+export async function addToJobOrder(joId: number, _prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const parsed = z
+    .object({ movementDate: dateStr, notes: optText(2000), lines: linesSchema })
+    .safeParse({ movementDate: formData.get("movementDate") ?? "", notes: formData.get("notes") ?? "", lines: readLines(formData) });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Please check the form." };
+  const { movementDate, notes } = parsed.data;
+  const totals = totalsOf(parsed.data.lines);
+
+  const error = await transaction(async (conn) => {
+    const jo = await queryOne<{ joNumber: string; clientId: number | null; reference: string | null; status: string }>(
+      "SELECT jo_number AS joNumber, client_id AS clientId, reference, status FROM job_orders WHERE id = ? FOR UPDATE",
+      [joId],
+      conn,
+    );
+    if (!jo) return "This job order no longer exists.";
+    if (jo.status === "CANCELLED") return "This job order is cancelled. Assign the materials on a new job order.";
+    const locked = await lockStock(totals, conn);
+    if ("error" in locked) return locked.error;
+    // Materials already on the job order get a bigger quantity; new ones become new lines.
+    const existing = await query<{ id: number; materialId: number }>(
+      "SELECT MIN(id) AS id, material_id AS materialId FROM job_order_items WHERE job_order_id = ? AND material_id IN (?) GROUP BY material_id",
+      [joId, [...totals.keys()]],
+      conn,
+    );
+    const lineOf = new Map(existing.map((e) => [e.materialId, e.id]));
+    let sort = Number((await queryOne<{ n: number | null }>("SELECT MAX(sort_order) AS n FROM job_order_items WHERE job_order_id = ?", [joId], conn))?.n ?? -1);
+    for (const [materialId, qty] of totals) {
+      const lineId = lineOf.get(materialId);
+      if (lineId) {
+        await execute("UPDATE job_order_items SET quantity = quantity + ? WHERE id = ?", [qty, lineId], conn);
+      } else {
+        const m = locked.mats.get(materialId)!;
+        await execute(
+          "INSERT INTO job_order_items SET ?",
+          [toRow("job_order_items", { jobOrderId: joId, materialId, description: m.name, spec: m.spec, unit: m.unit, quantity: qty, sortOrder: ++sort })],
+          conn,
+        );
+      }
+    }
+    await execute(
+      "INSERT INTO stock_movements (material_id, type, quantity, movement_date, client_id, job_order_id, reference, notes, created_by_id) VALUES ?",
+      [[...totals].map(([materialId, qty]) => [materialId, "ISSUE", -qty, movementDate, jo.clientId, joId, jo.reference ?? jo.joNumber, notes, user.id])],
+      conn,
+    );
+    return null;
+  });
+  if (error) return { error };
+  revalidatePath("/inventory");
+  redirect(`/inventory/job-orders/${joId}?saved=added`);
+}
+
+/**
+ * Records materials coming back from a job order as RETURN movements, at the cost they went out at,
+ * so stock goes back up and the project cost goes down. Never more than is still out on it.
+ * Call inside a transaction with the job order row locked. Returns an error message, or null.
+ */
+async function returnFromJo(
+  jo: { id: number; joNumber: string; clientId: number | null },
+  lines: Map<number, number>,
+  movementDate: string,
+  notes: string,
+  userId: number,
+  conn: PoolConnection,
+) {
+  const out = new Map((await jobOrderMaterials(jo.id, conn)).map((m) => [m.materialId, m]));
+  for (const [materialId, qty] of lines) {
+    const m = out.get(materialId);
+    if (!m) return `That material isn’t on ${jo.joNumber}.`;
+    if (qty > m.out) return `Only ${m.out} ${m.unit} of “${m.description}” is still out on ${jo.joNumber}.`;
+  }
+  if (lines.size) {
+    await execute(
+      "INSERT INTO stock_movements (material_id, type, quantity, unit_cost, movement_date, client_id, job_order_id, reference, notes, created_by_id) VALUES ?",
+      [[...lines].map(([materialId, qty]) => [materialId, "RETURN", qty, out.get(materialId)!.cost, movementDate, jo.clientId, jo.id, jo.joNumber, notes, userId])],
+      conn,
+    );
+  }
+  return null;
+}
+
+const returnSchema = z.object({
+  movementDate: dateStr,
+  notes: z.string().trim().min(1, "Say why they’re being removed (e.g. unused, returned to warehouse, wrong item).").max(2000),
+});
+
+/** Removes materials from a job order: they come back into stock (RETURN), up to what's still out. */
+export async function returnFromJobOrder(joId: number, _prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const parsed = returnSchema
+    .extend({ lines: linesSchema })
+    .safeParse({ movementDate: formData.get("movementDate") ?? "", notes: formData.get("notes") ?? "", lines: readLines(formData) });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Please check the form." };
+  const { movementDate, notes } = parsed.data;
+  const error = await transaction(async (conn) => {
+    const jo = await queryOne<{ joNumber: string; clientId: number | null; status: string }>(
+      "SELECT jo_number AS joNumber, client_id AS clientId, status FROM job_orders WHERE id = ? FOR UPDATE",
+      [joId],
+      conn,
+    );
+    if (!jo) return "This job order no longer exists.";
+    if (jo.status === "CANCELLED") return "This job order is cancelled; its materials are already back in stock.";
+    return returnFromJo({ id: joId, ...jo }, totalsOf(parsed.data.lines), movementDate, notes, user.id, conn);
+  });
+  if (error) return { error };
+  revalidatePath("/inventory");
+  redirect(`/inventory/job-orders/${joId}?saved=returned`);
+}
+
+/**
+ * Removes a material from a client: the quantity comes back into stock from the client's job orders,
+ * newest first, as RETURN movements on each job order it came from.
+ */
+export async function returnFromClient(clientId: number, materialId: number, _prev: FormState, formData: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const parsed = returnSchema
+    .extend({ quantity: z.coerce.number({ error: "Enter how many to remove." }).positive("Enter how many to remove.") })
+    .safeParse({ movementDate: formData.get("movementDate") ?? "", notes: formData.get("notes") ?? "", quantity: formData.get("quantity") ?? "" });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Please check the form." };
+  const { movementDate, notes } = parsed.data;
+  let left = round2(parsed.data.quantity);
+
+  const error = await transaction(async (conn) => {
+    const jos = await query<{ id: number; joNumber: string; clientId: number | null }>(
+      `SELECT DISTINCT jo.id, jo.jo_number AS joNumber, jo.client_id AS clientId, jo.jo_date
+       FROM job_orders jo JOIN job_order_items i ON i.job_order_id = jo.id
+       WHERE jo.client_id = ? AND jo.status = 'ISSUED' AND i.material_id = ?
+       ORDER BY jo.jo_date DESC, jo.id DESC
+       FOR UPDATE`,
+      [clientId, materialId],
+      conn,
+    );
+    let available = 0;
+    const plan: [(typeof jos)[number], number][] = [];
+    for (const jo of jos) {
+      const out = (await jobOrderMaterials(jo.id, conn)).find((m) => m.materialId === materialId)?.out ?? 0;
+      available = round2(available + out);
+      const take = Math.min(out, left);
+      if (take > 0) {
+        plan.push([jo, round2(take)]);
+        left = round2(left - take);
+      }
+    }
+    if (left > 0) return `Only ${available} of that material is still out with this client on job orders.`;
+    for (const [jo, qty] of plan) {
+      const err = await returnFromJo(jo, new Map([[materialId, qty]]), movementDate, notes, user.id, conn);
+      if (err) return err;
+    }
+    return null;
+  });
+  if (error) return { error };
+  revalidatePath("/inventory");
+  revalidatePath(`/clients/${clientId}`);
+  return { ok: "Removed. The materials are back in stock." };
 }
 
 /**
@@ -109,28 +284,8 @@ export async function cancelJobOrder(id: number, _fd: FormData) {
       conn,
     );
     if (!jo || jo.status === "CANCELLED") return;
-    // Still out = what the job order issued, less what has been returned. Based on the job order's
-    // items, so it's right even for job orders whose ISSUE rows were removed by an old log clear.
-    const out = await query<{ materialId: number; qty: number; cost: number | null }>(
-      `SELECT i.material_id AS materialId,
-              SUM(i.quantity) - COALESCE((SELECT SUM(r.quantity) FROM stock_movements r
-                                          WHERE r.job_order_id = ? AND r.material_id = i.material_id AND r.type = 'RETURN'), 0) AS qty,
-              COALESCE((SELECT MAX(x.unit_cost) FROM stock_movements x
-                        WHERE x.job_order_id = ? AND x.material_id = i.material_id AND x.type = 'ISSUE'), m.default_cost) AS cost
-       FROM job_order_items i JOIN materials m ON m.id = i.material_id
-       WHERE i.job_order_id = ?
-       GROUP BY i.material_id, m.default_cost
-       HAVING qty > 0`,
-      [id, id, id],
-      conn,
-    );
-    if (out.length) {
-      await execute(
-        "INSERT INTO stock_movements (material_id, type, quantity, unit_cost, movement_date, client_id, job_order_id, reference, notes, created_by_id) VALUES ?",
-        [out.map((o) => [o.materialId, "RETURN", round2(Number(o.qty)), o.cost, today, jo.clientId, id, jo.joNumber, `Job order ${jo.joNumber} cancelled`, user.id])],
-        conn,
-      );
-    }
+    const out = (await jobOrderMaterials(id, conn)).filter((m) => m.out > 0);
+    await returnFromJo({ id, ...jo }, new Map(out.map((m) => [m.materialId, m.out])), today, `Job order ${jo.joNumber} cancelled`, user.id, conn);
     await execute(
       "UPDATE job_orders SET status = 'CANCELLED', cancelled_by_id = ?, cancelled_at = NOW() WHERE id = ?",
       [user.id, id],

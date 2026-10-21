@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { cancelJobOrder } from "@/app/actions/inventory";
+import { cancelJobOrder, returnFromJobOrder } from "@/app/actions/inventory";
 import { ConfirmButton } from "@/components/client-ui";
+import { JobOrderReturnForm } from "@/components/return-forms";
 import { JoStatusBadge } from "@/components/stock-ui";
 import { PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
-import { fmtDate, num } from "@/lib/format";
+import { fmtDate, num, todayPH } from "@/lib/format";
 import { getJobOrder } from "@/lib/job-orders";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
@@ -30,12 +31,14 @@ export default async function JobOrderPage({ params, searchParams }: { params: P
         back={{ href: "/inventory/job-orders", label: "Job orders" }}
         actions={
           <>
-            {jo.clientId && <Link href={`/inventory/issue?client=${jo.clientId}`} className="btn">Assign more</Link>}
+            {!cancelled && <Link href={`/inventory/job-orders/${id}/add`} className="btn">Add materials</Link>}
             <Link href={`/job-orders/${id}/print`} className="btn btn-primary">Print</Link>
           </>
         }
       />
       {saved === "created" && <p className="ok-box mb-4 max-w-3xl">Materials assigned and job order {jo.joNumber} created. Print it for the team / client to sign.</p>}
+      {saved === "added" && <p className="ok-box mb-4 max-w-3xl">Materials added to {jo.joNumber}.</p>}
+      {saved === "returned" && <p className="ok-box mb-4 max-w-3xl">Materials removed from {jo.joNumber} and returned to stock.</p>}
       {saved === "cancelled" && <p className="ok-box mb-4 max-w-3xl">Job order cancelled. Its materials are back in stock.</p>}
       {cancelled && (
         <p className="error-box mb-4 max-w-3xl">
@@ -69,24 +72,31 @@ export default async function JobOrderPage({ params, searchParams }: { params: P
         )}
       </div>
 
-      <div className="card max-w-3xl overflow-x-auto">
-        <table className="table">
-          <thead><tr><th>#</th><th>Material</th><th className="num">Qty</th><th>Unit</th></tr></thead>
-          <tbody>
-            {jo.items.map((i, n) => (
-              <tr key={i.id} className={cancelled ? "text-slate-400 line-through" : ""}>
-                <td className="text-slate-500">{n + 1}</td>
-                <td>
-                  {i.materialId ? <Link className="text-brand-700 hover:underline" href={`/inventory/${i.materialId}`}>{i.description}</Link> : i.description}
-                  {i.spec && <span className="text-slate-500"> · {i.spec}</span>}
-                </td>
-                <td className="num">{num(i.quantity)}</td>
-                <td>{i.unit}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {cancelled ? (
+        <div className="card max-w-3xl overflow-x-auto">
+          <table className="table">
+            <thead><tr><th>#</th><th>Material</th><th className="num">Qty</th><th>Unit</th></tr></thead>
+            <tbody>
+              {jo.items.map((i, n) => (
+                <tr key={i.id} className="text-slate-400 line-through">
+                  <td>{n + 1}</td>
+                  <td>{i.description}{i.spec && <span> · {i.spec}</span>}</td>
+                  <td className="num">{num(i.quantity)}</td>
+                  <td>{i.unit}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <section className="card max-w-3xl overflow-x-auto">
+          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+            <h2>Materials</h2>
+            <Link href={`/inventory/job-orders/${id}/add`} className="btn btn-sm">+ Add materials</Link>
+          </div>
+          <JobOrderReturnForm action={returnFromJobOrder.bind(null, id)} materials={jo.materials} today={todayPH()} />
+        </section>
+      )}
 
       {user.role === "ADMIN" && !cancelled && (
         <div className="card mt-6 max-w-3xl p-5">

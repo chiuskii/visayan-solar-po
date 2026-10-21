@@ -33,7 +33,46 @@ export async function getJobOrder(id: number) {
     jo.clientId ? queryOne<Client>(`SELECT ${cols("clients")} FROM clients WHERE id = ?`, [jo.clientId]) : undefined,
     query<JobOrderItem>(`SELECT ${cols("job_order_items")} FROM job_order_items WHERE job_order_id = ? ORDER BY sort_order, id`, [id]),
   ]);
-  return { ...jo, client: client ?? null, items };
+  return { ...jo, client: client ?? null, items, materials: await jobOrderMaterials(id) };
+}
+
+export type JoMaterial = {
+  materialId: number;
+  description: string;
+  spec: string | null;
+  unit: string;
+  issued: number;
+  returned: number;
+  /** Still with the client: issued less returned. */
+  out: number;
+  /** Cost it went out at (the ISSUE cost, else the material's default cost), used for returns. */
+  cost: number | null;
+};
+
+/**
+ * Per material on a job order: issued (from its items, so it's right even if old ISSUE rows were
+ * cleared from the log), returned (RETURN movements) and still out. Pass `conn` inside a transaction.
+ */
+export async function jobOrderMaterials(joId: number, conn?: PoolConnection): Promise<JoMaterial[]> {
+  const rows = await query<{ materialId: number; description: string; spec: string | null; unit: string; issued: number; returned: number; cost: number | null }>(
+    `SELECT i.material_id AS materialId, MIN(i.description) AS description, MIN(i.spec) AS spec, MIN(i.unit) AS unit,
+            SUM(i.quantity) AS issued,
+            COALESCE((SELECT SUM(r.quantity) FROM stock_movements r
+                      WHERE r.job_order_id = ? AND r.material_id = i.material_id AND r.type = 'RETURN'), 0) AS returned,
+            COALESCE((SELECT MAX(x.unit_cost) FROM stock_movements x
+                      WHERE x.job_order_id = ? AND x.material_id = i.material_id AND x.type = 'ISSUE'), MIN(m.default_cost)) AS cost
+     FROM job_order_items i JOIN materials m ON m.id = i.material_id
+     WHERE i.job_order_id = ?
+     GROUP BY i.material_id
+     ORDER BY MIN(i.sort_order), MIN(i.id)`,
+    [joId, joId, joId],
+    conn,
+  );
+  return rows.map((r) => {
+    const issued = Math.round(Number(r.issued) * 100) / 100;
+    const returned = Math.round(Number(r.returned) * 100) / 100;
+    return { ...r, issued, returned, out: Math.round((issued - returned) * 100) / 100, cost: r.cost === null ? null : Number(r.cost) };
+  });
 }
 
 export type JobOrderDetail = NonNullable<Awaited<ReturnType<typeof getJobOrder>>>;

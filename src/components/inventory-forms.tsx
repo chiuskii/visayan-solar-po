@@ -19,6 +19,7 @@ export function IssueForm({
   bundles,
   today,
   initialClientId,
+  addTo,
 }: {
   action: (prev: FormState, fd: FormData) => Promise<FormState>;
   materials: StockOpt[];
@@ -26,6 +27,8 @@ export function IssueForm({
   bundles: IssueBundleOpt[];
   today: string;
   initialClientId?: number;
+  /** Adding to an existing job order: its client and reference are fixed. */
+  addTo?: { id: number; joNumber: string; clientName: string | null };
 }) {
   const [state, onSubmit, pending] = useFormAction<FormState>(action, {});
   const [lines, setLines] = useState([{ key: 1, materialId: "", quantity: "" }]);
@@ -78,23 +81,32 @@ export function IssueForm({
     <form onSubmit={onSubmit} className="space-y-6">
       <input type="hidden" name="lines" value={json} />
       <section className="card grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="sm:col-span-2">
-          <label className="label" htmlFor="clientId">Client / project</label>
-          <select id="clientId" name="clientId" className="input" defaultValue={initialClientId ?? ""}>
-            <option value="">— None (enter a reference) —</option>
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-        </div>
+        {addTo ? (
+          <div className="sm:col-span-2">
+            <div className="label">Job order</div>
+            <div className="py-2 font-medium">{addTo.joNumber}{addTo.clientName && <span className="font-normal text-slate-600"> · {addTo.clientName}</span>}</div>
+          </div>
+        ) : (
+          <div className="sm:col-span-2">
+            <label className="label" htmlFor="clientId">Client / project</label>
+            <select id="clientId" name="clientId" className="input" defaultValue={initialClientId ?? ""}>
+              <option value="">— None (enter a reference) —</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div>
           <label className="label" htmlFor="movementDate">Date *</label>
           <input id="movementDate" name="movementDate" type="date" className="input" defaultValue={today} required />
         </div>
-        <div>
-          <label className="label" htmlFor="reference">Reference</label>
-          <input id="reference" name="reference" className="input" placeholder="e.g. project name, DR no." maxLength={120} />
-        </div>
+        {!addTo && (
+          <div>
+            <label className="label" htmlFor="reference">Reference</label>
+            <input id="reference" name="reference" className="input" placeholder="e.g. project name, DR no." maxLength={120} />
+          </div>
+        )}
         <div className="sm:col-span-2 lg:col-span-4">
           <label className="label" htmlFor="notes">Notes</label>
           <input id="notes" name="notes" className="input" maxLength={2000} />
@@ -103,7 +115,7 @@ export function IssueForm({
 
       <section className="card overflow-x-auto">
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <h2>Materials to assign</h2>
+          <h2>{addTo ? "Materials to add" : "Materials to assign"}</h2>
           <div className="flex flex-wrap items-center gap-2">
             {bundles.length > 0 && (
               <>
@@ -166,8 +178,10 @@ export function IssueForm({
 
       {state.error && <p className="error-box">{state.error}</p>}
       <div className="flex gap-2">
-        <button className="btn btn-primary" disabled={pending || !anyInStock}>{pending ? "Saving…" : "Assign & create job order"}</button>
-        <Link href="/inventory" className="btn">Cancel</Link>
+        <button className="btn btn-primary" disabled={pending || !anyInStock}>
+          {pending ? "Saving…" : addTo ? `Add to ${addTo.joNumber}` : "Assign & create job order"}
+        </button>
+        <Link href={addTo ? `/inventory/job-orders/${addTo.id}` : "/inventory"} className="btn">Cancel</Link>
       </div>
     </form>
   );

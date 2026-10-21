@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { query } from "@/db";
-import { fmtDate, num } from "@/lib/format";
+import { returnFromClient } from "@/app/actions/inventory";
+import { fmtDate, num, todayPH } from "@/lib/format";
+import { ClientReturnButton } from "./return-forms";
 import { Empty } from "./ui";
 
 /** Materials assigned to a client from Inventory: net totals per material (less returns), then each movement. */
@@ -29,6 +31,18 @@ export async function ClientMaterials({ clientId }: { clientId: number }) {
      ORDER BY sm.movement_date DESC, sm.id DESC`,
     [clientId],
   );
+  // What can be removed: still out on the client's open (not cancelled) job orders, per material.
+  const outRows = await query<{ materialId: number; out: number }>(
+    `SELECT i.material_id AS materialId,
+            SUM(i.quantity) - COALESCE((SELECT SUM(r.quantity) FROM stock_movements r JOIN job_orders j ON j.id = r.job_order_id
+                                        WHERE r.type = 'RETURN' AND r.material_id = i.material_id AND j.client_id = ? AND j.status = 'ISSUED'), 0) AS \`out\`
+     FROM job_order_items i JOIN job_orders jo ON jo.id = i.job_order_id
+     WHERE jo.client_id = ? AND jo.status = 'ISSUED' AND i.material_id IS NOT NULL
+     GROUP BY i.material_id`,
+    [clientId, clientId],
+  );
+  const outOnJos = new Map(outRows.map((r) => [r.materialId, Math.round(Number(r.out) * 100) / 100]));
+  const today = todayPH();
   const totals = new Map<number, { name: string; spec: string | null; unit: string; qty: number }>();
   for (const r of rows) {
     const t = totals.get(r.materialId) ?? { name: r.name, spec: r.spec, unit: r.unit, qty: 0 };
@@ -51,12 +65,15 @@ export async function ClientMaterials({ clientId }: { clientId: number }) {
       ) : (
         <>
           <table className="table">
-            <thead><tr><th>Material</th><th className="num">Net assigned</th></tr></thead>
+            <thead><tr><th>Material</th><th className="num">Net assigned</th><th></th></tr></thead>
             <tbody>
               {[...totals].filter(([, t]) => t.qty !== 0).map(([id, t]) => (
                 <tr key={id}>
                   <td><Link className="text-brand-700 hover:underline" href={`/inventory/${id}`}>{t.name}</Link>{t.spec && <span className="text-slate-500"> · {t.spec}</span>}</td>
                   <td className="num font-medium">{num(t.qty)} {t.unit}</td>
+                  <td className="text-right">
+                    <ClientReturnButton action={returnFromClient.bind(null, clientId, id)} unit={t.unit} max={outOnJos.get(id) ?? 0} today={today} />
+                  </td>
                 </tr>
               ))}
             </tbody>
