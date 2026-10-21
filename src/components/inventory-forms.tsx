@@ -179,7 +179,7 @@ export function IssueForm({
       {state.error && <p className="error-box">{state.error}</p>}
       <div className="flex gap-2">
         <button className="btn btn-primary" disabled={pending || !anyInStock}>
-          {pending ? "Saving…" : addTo ? `Add to ${addTo.joNumber}` : "Assign & create job order"}
+          {pending ? "Saving…" : addTo ? `Add to ${addTo.joNumber}` : "Assign materials"}
         </button>
         <Link href={addTo ? `/inventory/job-orders/${addTo.id}` : "/inventory"} className="btn">Cancel</Link>
       </div>

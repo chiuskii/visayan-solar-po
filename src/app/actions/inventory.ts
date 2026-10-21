@@ -58,7 +58,50 @@ async function lockStock(totals: Map<number, number>, conn: PoolConnection): Pro
   return { mats: new Map(mats.map((m) => [m.id, m])) };
 }
 
-/** Takes materials out of stock for a client / project. Refuses to go below what's on hand. */
+/**
+ * Adds materials to an open job order: materials already on it get a bigger quantity, new ones become
+ * new lines, and the stock goes out as ISSUE movements. Call inside a transaction, with the job order
+ * locked and the stock checked by lockStock.
+ */
+async function appendToJo(
+  jo: { id: number; joNumber: string; clientId: number | null; reference: string | null },
+  totals: Map<number, number>,
+  mats: Map<number, LockedMaterial>,
+  a: { movementDate: string; reference: string | null; notes: string | null; userId: number },
+  conn: PoolConnection,
+) {
+  const existing = await query<{ id: number; materialId: number }>(
+    "SELECT MIN(id) AS id, material_id AS materialId FROM job_order_items WHERE job_order_id = ? AND material_id IN (?) GROUP BY material_id",
+    [jo.id, [...totals.keys()]],
+    conn,
+  );
+  const lineOf = new Map(existing.map((e) => [e.materialId, e.id]));
+  let sort = Number((await queryOne<{ n: number | null }>("SELECT MAX(sort_order) AS n FROM job_order_items WHERE job_order_id = ?", [jo.id], conn))?.n ?? -1);
+  for (const [materialId, qty] of totals) {
+    const lineId = lineOf.get(materialId);
+    if (lineId) {
+      await execute("UPDATE job_order_items SET quantity = quantity + ? WHERE id = ?", [qty, lineId], conn);
+    } else {
+      const m = mats.get(materialId)!;
+      await execute(
+        "INSERT INTO job_order_items SET ?",
+        [toRow("job_order_items", { jobOrderId: jo.id, materialId, description: m.name, spec: m.spec, unit: m.unit, quantity: qty, sortOrder: ++sort })],
+        conn,
+      );
+    }
+  }
+  await execute(
+    "INSERT INTO stock_movements (material_id, type, quantity, movement_date, client_id, job_order_id, reference, notes, created_by_id) VALUES ?",
+    [[...totals].map(([materialId, qty]) => [materialId, "ISSUE", -qty, a.movementDate, jo.clientId, jo.id, a.reference ?? jo.reference ?? jo.joNumber, a.notes, a.userId])],
+    conn,
+  );
+}
+
+/**
+ * Takes materials out of stock for a client / project. Refuses to go below what's on hand.
+ * Each client has one open job order: the materials are added to it, and it's created the first time
+ * (or after the client's job order was cancelled). Assignments without a client get their own job order.
+ */
 export async function issueStock(_prev: FormState, formData: FormData): Promise<FormState> {
   const user = await requireUser();
   const parsed = z
@@ -81,10 +124,26 @@ export async function issueStock(_prev: FormState, formData: FormData): Promise<
   if (!clientId && !reference) return { error: "Choose the client/project, or enter a reference for where it went." };
   const totals = totalsOf(parsed.data.lines);
 
-  // Creates the job order and its stock movements together; returns its id, or an error message.
-  const result = await transaction(async (conn): Promise<{ error: string } | { joId: number }> => {
+  // Adds to the client's job order (or creates it) together with the stock movements.
+  const result = await transaction(async (conn): Promise<{ error: string } | { joId: number; added: boolean }> => {
+    if (clientId) {
+      // Lock the client first, so two people assigning to the same client at once can't both create a job order.
+      if (!(await queryOne("SELECT id FROM clients WHERE id = ? FOR UPDATE", [clientId], conn))) return { error: "That client no longer exists." };
+    }
     const locked = await lockStock(totals, conn);
     if ("error" in locked) return locked;
+    const open = clientId
+      ? await queryOne<{ id: number; joNumber: string; clientId: number | null; reference: string | null }>(
+          `SELECT id, jo_number AS joNumber, client_id AS clientId, reference FROM job_orders
+           WHERE client_id = ? AND status = 'ISSUED' ORDER BY jo_date DESC, id DESC LIMIT 1 FOR UPDATE`,
+          [clientId],
+          conn,
+        )
+      : undefined;
+    if (open) {
+      await appendToJo(open, totals, locked.mats, { movementDate, reference, notes, userId: user.id }, conn);
+      return { joId: open.id, added: true };
+    }
     const joNumber = await nextJoNumber(movementDate, conn);
     const jo = await execute(
       "INSERT INTO job_orders SET ?",
@@ -105,11 +164,11 @@ export async function issueStock(_prev: FormState, formData: FormData): Promise<
       [[...totals].map(([materialId, qty]) => [materialId, "ISSUE", -qty, movementDate, clientId, joId, reference ?? joNumber, notes, user.id])],
       conn,
     );
-    return { joId };
+    return { joId, added: false };
   });
   if ("error" in result) return { error: result.error };
   revalidatePath("/inventory");
-  redirect(`/inventory/job-orders/${result.joId}?saved=created`);
+  redirect(`/inventory/job-orders/${result.joId}?saved=${result.added ? "added" : "created"}`);
 }
 
 /** Adds more materials to an existing job order: out of stock, onto the same job order and client. */
@@ -132,32 +191,7 @@ export async function addToJobOrder(joId: number, _prev: FormState, formData: Fo
     if (jo.status === "CANCELLED") return "This job order is cancelled. Assign the materials on a new job order.";
     const locked = await lockStock(totals, conn);
     if ("error" in locked) return locked.error;
-    // Materials already on the job order get a bigger quantity; new ones become new lines.
-    const existing = await query<{ id: number; materialId: number }>(
-      "SELECT MIN(id) AS id, material_id AS materialId FROM job_order_items WHERE job_order_id = ? AND material_id IN (?) GROUP BY material_id",
-      [joId, [...totals.keys()]],
-      conn,
-    );
-    const lineOf = new Map(existing.map((e) => [e.materialId, e.id]));
-    let sort = Number((await queryOne<{ n: number | null }>("SELECT MAX(sort_order) AS n FROM job_order_items WHERE job_order_id = ?", [joId], conn))?.n ?? -1);
-    for (const [materialId, qty] of totals) {
-      const lineId = lineOf.get(materialId);
-      if (lineId) {
-        await execute("UPDATE job_order_items SET quantity = quantity + ? WHERE id = ?", [qty, lineId], conn);
-      } else {
-        const m = locked.mats.get(materialId)!;
-        await execute(
-          "INSERT INTO job_order_items SET ?",
-          [toRow("job_order_items", { jobOrderId: joId, materialId, description: m.name, spec: m.spec, unit: m.unit, quantity: qty, sortOrder: ++sort })],
-          conn,
-        );
-      }
-    }
-    await execute(
-      "INSERT INTO stock_movements (material_id, type, quantity, movement_date, client_id, job_order_id, reference, notes, created_by_id) VALUES ?",
-      [[...totals].map(([materialId, qty]) => [materialId, "ISSUE", -qty, movementDate, jo.clientId, joId, jo.reference ?? jo.joNumber, notes, user.id])],
-      conn,
-    );
+    await appendToJo({ id: joId, ...jo }, totals, locked.mats, { movementDate, reference: null, notes, userId: user.id }, conn);
     return null;
   });
   if (error) return { error };

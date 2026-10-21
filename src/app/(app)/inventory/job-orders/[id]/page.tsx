@@ -37,7 +37,7 @@ export default async function JobOrderPage({ params, searchParams }: { params: P
         }
       />
       {saved === "created" && <p className="ok-box mb-4 max-w-3xl">Materials assigned and job order {jo.joNumber} created. Print it for the team / client to sign.</p>}
-      {saved === "added" && <p className="ok-box mb-4 max-w-3xl">Materials added to {jo.joNumber}.</p>}
+      {saved === "added" && <p className="ok-box mb-4 max-w-3xl">Materials added to {jo.joNumber}{jo.client ? `, ${jo.client.name}’s job order` : ""}.</p>}
       {saved === "returned" && <p className="ok-box mb-4 max-w-3xl">Materials removed from {jo.joNumber} and returned to stock.</p>}
       {saved === "cancelled" && <p className="ok-box mb-4 max-w-3xl">Job order cancelled. Its materials are back in stock.</p>}
       {cancelled && (

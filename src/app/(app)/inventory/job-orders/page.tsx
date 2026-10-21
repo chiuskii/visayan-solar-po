@@ -42,7 +42,7 @@ export default async function JobOrdersPage({ searchParams }: { searchParams: Pr
     <>
       <PageHeader
         title="Job orders"
-        subtitle="Created automatically each time materials are assigned to a client / project."
+        subtitle="One per client: created the first time materials are assigned to them, and added to after that."
         back={{ href: "/inventory", label: "Inventory" }}
         actions={<Link href={`/inventory/issue${clientId ? `?client=${clientId}` : ""}`} className="btn btn-primary">Assign to client</Link>}
       />
@@ -80,7 +80,7 @@ export default async function JobOrdersPage({ searchParams }: { searchParams: Pr
 
       <div className="card overflow-x-auto">
         {rows.length === 0 ? (
-          <Empty>{filtered ? "No job orders match these filters." : "No job orders yet. One is created each time you assign materials to a client."}</Empty>
+          <Empty>{filtered ? "No job orders match these filters." : "No job orders yet. One is created the first time you assign materials to a client."}</Empty>
         ) : (
           <table className="table min-w-[760px]">
             <thead><tr><th>JO no.</th><th>Date</th><th>Client / project</th><th className="num">Items</th><th>Prepared by</th><th>Status</th></tr></thead>

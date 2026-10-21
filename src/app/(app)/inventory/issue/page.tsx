@@ -22,7 +22,7 @@ export default async function IssuePage({ searchParams }: { searchParams: Promis
     <>
       <PageHeader
         title="Assign materials to a client"
-        subtitle="Takes the materials out of warehouse stock and records them against the client / project. A numbered job order is created automatically."
+        subtitle="Takes the materials out of warehouse stock and records them against the client / project. They go on the client’s job order, which is created the first time."
         back={{ href: "/inventory", label: "Inventory" }}
       />
       <IssueForm action={issueStock} materials={stock} clients={clients} bundles={bundles} today={todayPH()} initialClientId={clients.find((c) => c.id === Number(client))?.id} />
