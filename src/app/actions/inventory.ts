@@ -40,7 +40,7 @@ function totalsOf(lines: { materialId: number; quantity: number }[]) {
   return totals;
 }
 
-type LockedMaterial = { id: number; name: string; spec: string | null; unit: string };
+type LockedMaterial = { id: number; name: string; spec: string | null; unit: string; defaultCost: number };
 
 /**
  * Locks the materials (so two people issuing at once can't take the same stock) and checks there's
@@ -48,7 +48,7 @@ type LockedMaterial = { id: number; name: string; spec: string | null; unit: str
  */
 async function lockStock(totals: Map<number, number>, conn: PoolConnection): Promise<{ error: string } | { mats: Map<number, LockedMaterial> }> {
   const ids = [...totals.keys()];
-  const mats = await query<LockedMaterial>("SELECT id, name, spec, unit FROM materials WHERE id IN (?) FOR UPDATE", [ids], conn);
+  const mats = await query<LockedMaterial>("SELECT id, name, spec, unit, default_cost AS defaultCost FROM materials WHERE id IN (?) FOR UPDATE", [ids], conn);
   if (mats.length !== ids.length) return { error: "One of the materials no longer exists." };
   const onHand = await onHandByMaterial(ids, conn);
   for (const m of mats) {
@@ -70,12 +70,15 @@ async function appendToJo(
   a: { movementDate: string; reference: string | null; notes: string | null; userId: number },
   conn: PoolConnection,
 ) {
-  const existing = await query<{ id: number; materialId: number }>(
-    "SELECT MIN(id) AS id, material_id AS materialId FROM job_order_items WHERE job_order_id = ? AND material_id IN (?) GROUP BY material_id",
+  // The client's price stays as it is on the job order; new lines are priced at the material's cost now.
+  const existing = await query<{ id: number; materialId: number; unitCost: number }>(
+    `SELECT MIN(id) AS id, material_id AS materialId, MIN(unit_cost) AS unitCost
+     FROM job_order_items WHERE job_order_id = ? AND material_id IN (?) GROUP BY material_id`,
     [jo.id, [...totals.keys()]],
     conn,
   );
   const lineOf = new Map(existing.map((e) => [e.materialId, e.id]));
+  const priceOf = new Map(existing.map((e) => [e.materialId, Number(e.unitCost)]));
   let sort = Number((await queryOne<{ n: number | null }>("SELECT MAX(sort_order) AS n FROM job_order_items WHERE job_order_id = ?", [jo.id], conn))?.n ?? -1);
   for (const [materialId, qty] of totals) {
     const lineId = lineOf.get(materialId);
@@ -85,14 +88,17 @@ async function appendToJo(
       const m = mats.get(materialId)!;
       await execute(
         "INSERT INTO job_order_items SET ?",
-        [toRow("job_order_items", { jobOrderId: jo.id, materialId, description: m.name, spec: m.spec, unit: m.unit, quantity: qty, sortOrder: ++sort })],
+        [toRow("job_order_items", { jobOrderId: jo.id, materialId, description: m.name, spec: m.spec, unit: m.unit, quantity: qty, unitCost: m.defaultCost, sortOrder: ++sort })],
         conn,
       );
+      priceOf.set(materialId, m.defaultCost);
     }
   }
   await execute(
-    "INSERT INTO stock_movements (material_id, type, quantity, movement_date, client_id, job_order_id, reference, notes, created_by_id) VALUES ?",
-    [[...totals].map(([materialId, qty]) => [materialId, "ISSUE", -qty, a.movementDate, jo.clientId, jo.id, a.reference ?? jo.reference ?? jo.joNumber, a.notes, a.userId])],
+    "INSERT INTO stock_movements (material_id, type, quantity, unit_cost, movement_date, client_id, job_order_id, reference, notes, created_by_id) VALUES ?",
+    [[...totals].map(([materialId, qty]) => [
+      materialId, "ISSUE", -qty, priceOf.get(materialId), a.movementDate, jo.clientId, jo.id, a.reference ?? jo.reference ?? jo.joNumber, a.notes, a.userId,
+    ])],
     conn,
   );
 }
@@ -152,16 +158,18 @@ export async function issueStock(_prev: FormState, formData: FormData): Promise<
     );
     const joId = jo.insertId;
     await execute(
-      "INSERT INTO job_order_items (job_order_id, material_id, description, spec, unit, quantity, sort_order) VALUES ?",
+      "INSERT INTO job_order_items (job_order_id, material_id, description, spec, unit, quantity, unit_cost, sort_order) VALUES ?",
       [[...totals].map(([materialId, qty], n) => {
         const m = locked.mats.get(materialId)!;
-        return [joId, materialId, m.name, m.spec, m.unit, qty, n];
+        return [joId, materialId, m.name, m.spec, m.unit, qty, m.defaultCost, n];
       })],
       conn,
     );
     await execute(
-      "INSERT INTO stock_movements (material_id, type, quantity, movement_date, client_id, job_order_id, reference, notes, created_by_id) VALUES ?",
-      [[...totals].map(([materialId, qty]) => [materialId, "ISSUE", -qty, movementDate, clientId, joId, reference ?? joNumber, notes, user.id])],
+      "INSERT INTO stock_movements (material_id, type, quantity, unit_cost, movement_date, client_id, job_order_id, reference, notes, created_by_id) VALUES ?",
+      [[...totals].map(([materialId, qty]) => [
+        materialId, "ISSUE", -qty, locked.mats.get(materialId)!.defaultCost, movementDate, clientId, joId, reference ?? joNumber, notes, user.id,
+      ])],
       conn,
     );
     return { joId, added: false };
@@ -304,6 +312,44 @@ export async function returnFromClient(clientId: number, materialId: number, _pr
 }
 
 /**
+ * Sets the client's price per material on a job order. The job order line and its assignment and return
+ * movements get the new price, so the project cost follows. Materials are not changed.
+ */
+export async function updateJobOrderPrices(joId: number, _prev: FormState, formData: FormData): Promise<FormState> {
+  await requireUser();
+  let raw: unknown = [];
+  try {
+    raw = JSON.parse(String(formData.get("prices") ?? "[]"));
+  } catch {
+    raw = [];
+  }
+  const parsed = z
+    .array(z.object({ materialId: z.number().int().positive(), unitCost: z.number().min(0, "A price can’t be negative.").max(1e10) }))
+    .min(1, "Change at least one price.")
+    .safeParse(raw);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the prices." };
+  const error = await transaction(async (conn) => {
+    const jo = await queryOne<{ status: string }>("SELECT status FROM job_orders WHERE id = ? FOR UPDATE", [joId], conn);
+    if (!jo) return "This job order no longer exists.";
+    if (jo.status === "CANCELLED") return "This job order is cancelled.";
+    for (const p of parsed.data) {
+      const price = round2(p.unitCost);
+      const res = await execute("UPDATE job_order_items SET unit_cost = ? WHERE job_order_id = ? AND material_id = ?", [price, joId, p.materialId], conn);
+      if (!res.affectedRows) return "One of the materials isn’t on this job order. Reload the page.";
+      await execute(
+        "UPDATE stock_movements SET unit_cost = ? WHERE job_order_id = ? AND material_id = ? AND type IN ('ISSUE', 'RETURN')",
+        [price, joId, p.materialId],
+        conn,
+      );
+    }
+    return null;
+  });
+  if (error) return { error };
+  revalidatePath("/inventory");
+  redirect(`/inventory/job-orders/${joId}?saved=prices`);
+}
+
+/**
  * Admin: cancels a job order and puts back in stock whatever is still out on it, as RETURN movements
  * at the cost it went out at. Nothing is deleted, so the history and the project cost (which nets to
  * zero) stay correct.
@@ -441,4 +487,38 @@ export async function saveStockCount(_prev: FormState, formData: FormData): Prom
   if ("error" in res) return { error: res.error };
   revalidatePath("/inventory");
   redirect(`/inventory/count?counted=${res.counted}&adjusted=${res.adjusted}`);
+}
+
+/**
+ * Saves the default cost of many materials at once (Inventory → Edit prices). Only Materials change:
+ * prices already assigned to clients stay on their job orders.
+ */
+export async function saveMaterialPrices(_prev: FormState, formData: FormData): Promise<FormState> {
+  await requireUser();
+  let raw: unknown = [];
+  try {
+    raw = JSON.parse(String(formData.get("prices") ?? "[]"));
+  } catch {
+    raw = [];
+  }
+  const parsed = z
+    .array(z.object({ materialId: z.number().int().positive(), defaultCost: z.number().min(0, "A price can’t be negative.").max(1e10) }))
+    .min(1, "Change at least one price.")
+    .max(5000)
+    .safeParse(raw);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the prices." };
+  const ids = [...new Set(parsed.data.map((p) => p.materialId))];
+  if (ids.length !== parsed.data.length) return { error: "A material is listed twice." };
+  const error = await transaction(async (conn) => {
+    const found = await query<{ id: number }>("SELECT id FROM materials WHERE id IN (?) FOR UPDATE", [ids], conn);
+    if (found.length !== ids.length) return "One of the materials no longer exists. Reload the page.";
+    for (const p of parsed.data) {
+      await execute("UPDATE materials SET default_cost = ? WHERE id = ?", [round2(p.defaultCost), p.materialId], conn);
+    }
+    return null;
+  });
+  if (error) return { error };
+  revalidatePath("/inventory");
+  revalidatePath("/materials");
+  redirect(`/inventory/prices?saved=${ids.length}`);
 }

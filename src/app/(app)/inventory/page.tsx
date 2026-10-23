@@ -46,6 +46,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
             <Link href="/inventory/project-cost" className="btn">Project cost</Link>
             <Link href="/inventory/report" className="btn">Stock report</Link>
             <Link href="/inventory/count" className="btn">Stock count</Link>
+            <Link href="/inventory/prices" className="btn">Edit prices</Link>
             <Link href="/inventory/adjust" className="btn">Adjust stock</Link>
             <Link href="/inventory/issue" className="btn btn-primary">Assign to client</Link>
           </>

@@ -1,6 +1,7 @@
 import "server-only";
 import { query, queryOne } from "@/db";
 import type { PoStatus } from "@/db/types";
+import { JO_LINE_JOIN } from "./job-orders";
 import { computeTotals, round2 } from "./po";
 
 // Materials cost of a project (client), for the project P&L:
@@ -17,8 +18,8 @@ export type WarehouseLine = {
   returned: number;
   net: number;
   cost: number;
-  /** Some movements had no cost recorded, so the material's default cost was used for them. */
-  estimated: boolean;
+  /** Some of it has no price (₱0): set the client's price on the job order. */
+  unpriced: boolean;
 };
 
 export type DirectLine = {
@@ -77,16 +78,18 @@ export async function projectCost(clientId: number, range: { from?: string; to?:
   }
 
   const [warehouseRows, poRows, lineRows] = await Promise.all([
-    query<{ materialId: number; name: string; spec: string | null; unit: string; issued: number; returned: number; cost: number; estimated: number }>(
-      `SELECT m.id AS materialId, m.name, m.spec, m.unit,
+    query<{ materialId: number; name: string; spec: string | null; unit: string; issued: number; returned: number; cost: number; unpriced: number }>(
+      // At the client's prices (on each movement), with names as assigned; never the material's current cost.
+      `SELECT m.id AS materialId,
+              MIN(IF(ji.id IS NULL, m.name, ji.description)) AS name, MIN(IF(ji.id IS NULL, m.spec, ji.spec)) AS spec, MIN(IF(ji.id IS NULL, m.unit, ji.unit)) AS unit,
               SUM(CASE WHEN sm.type = 'ISSUE' THEN -sm.quantity ELSE 0 END) AS issued,
               SUM(CASE WHEN sm.type = 'RETURN' THEN sm.quantity ELSE 0 END) AS returned,
-              SUM(-sm.quantity * COALESCE(sm.unit_cost, m.default_cost)) AS cost,
-              MAX(sm.unit_cost IS NULL) AS estimated
-       FROM stock_movements sm JOIN materials m ON m.id = sm.material_id
+              SUM(-sm.quantity * COALESCE(sm.unit_cost, 0)) AS cost,
+              MAX(COALESCE(sm.unit_cost, 0) = 0) AS unpriced
+       FROM stock_movements sm JOIN materials m ON m.id = sm.material_id ${JO_LINE_JOIN}
        WHERE ${mWhere.join(" AND ")}
        GROUP BY m.id
-       ORDER BY cost DESC, m.name`,
+       ORDER BY cost DESC, name`,
       mParams,
     ),
     query<{ poId: number; poNumber: string; poDate: string; status: PoStatus; discount: number; vatRate: number }>(
@@ -118,7 +121,7 @@ export async function projectCost(clientId: number, range: { from?: string; to?:
       returned: round2(Number(r.returned)),
       net: round2(Number(r.issued) - Number(r.returned)),
       cost: round2(Number(r.cost)),
-      estimated: Boolean(Number(r.estimated)),
+      unpriced: Boolean(Number(r.unpriced)),
     }))
     .filter((r) => r.net !== 0 || r.cost !== 0);
 

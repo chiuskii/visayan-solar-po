@@ -1,9 +1,9 @@
 -- Fills in materials with no default cost (₱0), and re-costs their stock movements.
 --
 --   1. Each ₱0 material gets the unit price from its latest PO line that has a price.
---   2. Movements of those materials that were costed at ₱0 (assignments, returns and adjustments;
---      migration 0013 gave them the ₱0 default cost) are re-costed at the material's default cost.
---      Receipts keep their PO price.
+--   2. Stock adjustments of those materials that were costed at ₱0 (migration 0013 gave them the ₱0
+--      default cost) are re-costed at the material's default cost. Receipts keep their PO price, and
+--      what was assigned to clients keeps its own price: set a client's prices on their job order.
 --   3. Lists the materials still at ₱0. Fill those in: Materials → "Export them" (the ₱0 list),
 --      enter default_cost, then Materials → Import. Then run this script again so step 2
 --      re-costs their movements too.
@@ -31,10 +31,10 @@ WHERE m.default_cost = 0;
 
 SELECT ROW_COUNT() AS filled_from_po_price;
 
--- 2. Re-cost ₱0 movements (not receipts) at the default cost.
+-- 2. Re-cost ₱0 adjustments at the default cost (not receipts, not client assignments or returns).
 UPDATE stock_movements sm JOIN materials m ON m.id = sm.material_id
 SET sm.unit_cost = m.default_cost
-WHERE sm.type <> 'RECEIVE' AND sm.unit_cost = 0 AND m.default_cost > 0;
+WHERE sm.type = 'ADJUST' AND sm.unit_cost = 0 AND m.default_cost > 0;
 
 SELECT ROW_COUNT() AS movements_recosted;
 
@@ -42,3 +42,9 @@ COMMIT;
 
 -- 3. Still to fill in by hand.
 SELECT id, name, spec, unit, category FROM materials WHERE default_cost = 0 ORDER BY name;
+
+-- Client job orders with ₱0 lines: set those prices on the job order (Prices section).
+SELECT jo.jo_number, c.name AS client, i.description, i.unit, i.quantity
+FROM job_order_items i JOIN job_orders jo ON jo.id = i.job_order_id LEFT JOIN clients c ON c.id = jo.client_id
+WHERE i.unit_cost = 0 AND jo.status = 'ISSUED'
+ORDER BY jo.jo_number, i.sort_order;

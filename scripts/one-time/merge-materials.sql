@@ -9,12 +9,14 @@
 --     → factor 100. The script refuses different units with factor 1.
 --
 -- What moves to the kept material:
---   stock movements (quantities × factor, unit cost ÷ factor), bundle items and job order items
---   (converted the same way), PO lines (relinked only: the PO stays as it was sent to the supplier).
+--   stock movements (quantities × factor, unit cost ÷ factor) and bundle items (converted the same way).
+--   PO lines and job order lines are relinked only: the PO stays as it was sent to the supplier, and
+--   what was assigned to clients keeps its own name, unit, quantity and price.
 --   The kept material also takes the duplicate's default cost, default supplier, category and spec
 --   where its own are empty, and the higher reorder level.
 -- When the units differ, the duplicate must not be on a PO that can still receive (not Delivered or
--- Cancelled) or on deliveries after the PO receiving cutover; those receipts would be in the wrong unit.
+-- Cancelled), on deliveries after the PO receiving cutover, or on an open job order: those would mix
+-- the two units.
 --
 -- Find the pairs with find-duplicate-materials.sql. Back up the database, then run:
 --   docker compose -f docker-compose.prod.yml --env-file .env exec -T db \
@@ -60,8 +62,11 @@ BEGIN
 			SELECT 1 FROM delivery_items di JOIN po_items pi ON pi.id = di.po_item_id
 			WHERE pi.material_id = p_dup
 			  AND di.delivery_id > (SELECT stock_cleared_delivery_id FROM company_settings WHERE id = 1)
+		) OR EXISTS (
+			SELECT 1 FROM job_order_items i JOIN job_orders jo ON jo.id = i.job_order_id
+			WHERE i.material_id = p_dup AND jo.status <> 'CANCELLED'
 		) THEN
-			SET v_msg = LEFT(CONCAT('Material ', p_dup, ' is on an open PO or a delivery since the cutover, and units differ. Finish those first.'), 128);
+			SET v_msg = LEFT(CONCAT('Material ', p_dup, ' is on an open PO, job order or a delivery since the cutover, and units differ.'), 128);
 			SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_msg;
 		END IF;
 	ELSEIF p_factor <> 1 THEN
@@ -74,9 +79,7 @@ BEGIN
 	UPDATE bundle_items
 	SET material_id = p_keep, quantity = ROUND(quantity * p_factor, 2), unit_cost = ROUND(unit_cost / p_factor, 2), unit = v_keep_unit
 	WHERE material_id = p_dup;
-	UPDATE job_order_items
-	SET material_id = p_keep, quantity = ROUND(quantity * p_factor, 2), unit = v_keep_unit
-	WHERE material_id = p_dup;
+	UPDATE job_order_items SET material_id = p_keep WHERE material_id = p_dup;
 	UPDATE po_items SET material_id = p_keep WHERE material_id = p_dup;
 
 	UPDATE materials k JOIN materials d ON d.id = p_dup

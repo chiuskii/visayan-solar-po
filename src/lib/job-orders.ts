@@ -4,6 +4,15 @@ import { query, queryOne } from "@/db";
 import { cols, type Client, type JobOrder, type JobOrderItem, type JoStatus } from "@/db/types";
 
 /**
+ * SQL that joins `ji`, the job order line a stock movement `sm` belongs to: the name, spec, unit and price
+ * as they were assigned to the client. Use IF(ji.id IS NULL, m.x, ji.x), so a blank on the job order stays blank.
+ */
+export const JO_LINE_JOIN = `
+  LEFT JOIN (SELECT job_order_id, material_id, MIN(id) AS line_id FROM job_order_items GROUP BY job_order_id, material_id) jl
+    ON jl.job_order_id = sm.job_order_id AND jl.material_id = sm.material_id
+  LEFT JOIN job_order_items ji ON ji.id = jl.line_id`;
+
+/**
  * Next job order number, e.g. VS-JO-2026-0007 (sequence restarts each year). Call inside the
  * transaction that inserts the job order: the row lock stops two assignments taking the same number.
  */
@@ -45,8 +54,8 @@ export type JoMaterial = {
   returned: number;
   /** Still with the client: issued less returned. */
   out: number;
-  /** Cost it went out at (the ISSUE cost, else the material's default cost), used for returns. */
-  cost: number | null;
+  /** The client's price per unit on this job order (used for its assignments and returns). */
+  cost: number;
 };
 
 /**
@@ -54,24 +63,23 @@ export type JoMaterial = {
  * cleared from the log), returned (RETURN movements) and still out. Pass `conn` inside a transaction.
  */
 export async function jobOrderMaterials(joId: number, conn?: PoolConnection): Promise<JoMaterial[]> {
-  const rows = await query<{ materialId: number; description: string; spec: string | null; unit: string; issued: number; returned: number; cost: number | null }>(
+  const rows = await query<{ materialId: number; description: string; spec: string | null; unit: string; issued: number; returned: number; cost: number }>(
     `SELECT i.material_id AS materialId, MIN(i.description) AS description, MIN(i.spec) AS spec, MIN(i.unit) AS unit,
             SUM(i.quantity) AS issued,
             COALESCE((SELECT SUM(r.quantity) FROM stock_movements r
                       WHERE r.job_order_id = ? AND r.material_id = i.material_id AND r.type = 'RETURN'), 0) AS returned,
-            COALESCE((SELECT MAX(x.unit_cost) FROM stock_movements x
-                      WHERE x.job_order_id = ? AND x.material_id = i.material_id AND x.type = 'ISSUE'), MIN(m.default_cost)) AS cost
-     FROM job_order_items i JOIN materials m ON m.id = i.material_id
-     WHERE i.job_order_id = ?
+            MIN(i.unit_cost) AS cost
+     FROM job_order_items i
+     WHERE i.job_order_id = ? AND i.material_id IS NOT NULL
      GROUP BY i.material_id
      ORDER BY MIN(i.sort_order), MIN(i.id)`,
-    [joId, joId, joId],
+    [joId, joId],
     conn,
   );
   return rows.map((r) => {
     const issued = Math.round(Number(r.issued) * 100) / 100;
     const returned = Math.round(Number(r.returned) * 100) / 100;
-    return { ...r, issued, returned, out: Math.round((issued - returned) * 100) / 100, cost: r.cost === null ? null : Number(r.cost) };
+    return { ...r, issued, returned, out: Math.round((issued - returned) * 100) / 100, cost: Number(r.cost) };
   });
 }
 

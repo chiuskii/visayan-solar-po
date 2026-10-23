@@ -22,7 +22,7 @@ export async function GET(req: Request) {
     ["Section", "Reference", "Date", "Status", "Supplier", "Material / description", "Spec", "Unit", "Qty", "Unit cost", "Amount", "Notes"],
   ];
   for (const w of r.warehouse) {
-    const notes = [`issued ${w.issued}`, w.returned ? `returned ${w.returned}` : null, w.estimated ? "default cost used where none was recorded" : null];
+    const notes = [`issued ${w.issued}`, w.returned ? `returned ${w.returned}` : null, w.unpriced ? "some has no price: set it on the client's job order" : null];
     rows.push(["Warehouse", null, null, null, null, w.name, w.spec, w.unit, w.net, w.net ? Math.round((w.cost / w.net) * 100) / 100 : null, w.cost, notes.filter(Boolean).join("; ")]);
   }
   for (const po of r.direct) {

@@ -187,6 +187,8 @@ export type JobOrderItem = {
   spec: string | null;
   unit: string;
   quantity: number;
+  /** The client's price per unit, set when first assigned. Editing the material doesn't change it. */
+  unitCost: number;
   sortOrder: number;
 };
 
@@ -278,7 +280,8 @@ export const COLUMNS = {
     notes: "notes", createdById: "created_by_id", cancelledById: "cancelled_by_id", cancelledAt: "cancelled_at", createdAt: "created_at", updatedAt: "updated_at",
   },
   job_order_items: {
-    id: "id", jobOrderId: "job_order_id", materialId: "material_id", description: "description", spec: "spec", unit: "unit", quantity: "quantity", sortOrder: "sort_order",
+    id: "id", jobOrderId: "job_order_id", materialId: "material_id", description: "description", spec: "spec", unit: "unit", quantity: "quantity", unitCost: "unit_cost",
+    sortOrder: "sort_order",
   },
   api_keys: {
     id: "id", name: "name", keyPrefix: "key_prefix", keyHash: "key_hash", active: "active", expiresAt: "expires_at",

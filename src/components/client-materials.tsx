@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { query } from "@/db";
 import { returnFromClient } from "@/app/actions/inventory";
-import { fmtDate, num, todayPH } from "@/lib/format";
+import { fmtDate, num, peso, todayPH } from "@/lib/format";
+import { JO_LINE_JOIN } from "@/lib/job-orders";
 import { ClientReturnButton } from "./return-forms";
 import { Empty } from "./ui";
 
@@ -20,11 +21,16 @@ export async function ClientMaterials({ clientId }: { clientId: number }) {
     byName: string | null;
     jobOrderId: number | null;
     joNumber: string | null;
+    unitCost: number | null;
   }>(
-    `SELECT sm.id, sm.movement_date AS movementDate, m.id AS materialId, m.name, m.spec, m.unit, -sm.quantity AS qty,
+    // Name, spec and unit as assigned to the client (the job order line), not as the material reads today.
+    `SELECT sm.id, sm.movement_date AS movementDate, m.id AS materialId,
+            IF(ji.id IS NULL, m.name, ji.description) AS name, IF(ji.id IS NULL, m.spec, ji.spec) AS spec, IF(ji.id IS NULL, m.unit, ji.unit) AS unit,
+            -sm.quantity AS qty, sm.unit_cost AS unitCost,
             sm.type, sm.reference, u.name AS byName, sm.job_order_id AS jobOrderId, jo.jo_number AS joNumber
      FROM stock_movements sm
      JOIN materials m ON m.id = sm.material_id
+     ${JO_LINE_JOIN}
      LEFT JOIN users u ON u.id = sm.created_by_id
      LEFT JOIN job_orders jo ON jo.id = sm.job_order_id
      WHERE sm.client_id = ? AND sm.type IN ('ISSUE', 'RETURN')
@@ -43,10 +49,11 @@ export async function ClientMaterials({ clientId }: { clientId: number }) {
   );
   const outOnJos = new Map(outRows.map((r) => [r.materialId, Math.round(Number(r.out) * 100) / 100]));
   const today = todayPH();
-  const totals = new Map<number, { name: string; spec: string | null; unit: string; qty: number }>();
+  const totals = new Map<number, { name: string; spec: string | null; unit: string; qty: number; amount: number }>();
   for (const r of rows) {
-    const t = totals.get(r.materialId) ?? { name: r.name, spec: r.spec, unit: r.unit, qty: 0 };
+    const t = totals.get(r.materialId) ?? { name: r.name, spec: r.spec, unit: r.unit, qty: 0, amount: 0 };
     t.qty = Math.round((t.qty + r.qty) * 100) / 100;
+    t.amount = Math.round((t.amount + r.qty * Number(r.unitCost ?? 0)) * 100) / 100;
     totals.set(r.materialId, t);
   }
 
@@ -65,12 +72,13 @@ export async function ClientMaterials({ clientId }: { clientId: number }) {
       ) : (
         <>
           <table className="table">
-            <thead><tr><th>Material</th><th className="num">Net assigned</th><th></th></tr></thead>
+            <thead><tr><th>Material</th><th className="num">Net assigned</th><th className="num">Amount</th><th></th></tr></thead>
             <tbody>
               {[...totals].filter(([, t]) => t.qty !== 0).map(([id, t]) => (
                 <tr key={id}>
                   <td><Link className="text-brand-700 hover:underline" href={`/inventory/${id}`}>{t.name}</Link>{t.spec && <span className="text-slate-500"> · {t.spec}</span>}</td>
                   <td className="num font-medium">{num(t.qty)} {t.unit}</td>
+                  <td className="num">{peso(t.amount)}</td>
                   <td className="text-right">
                     <ClientReturnButton action={returnFromClient.bind(null, clientId, id)} unit={t.unit} max={outOnJos.get(id) ?? 0} today={today} />
                   </td>

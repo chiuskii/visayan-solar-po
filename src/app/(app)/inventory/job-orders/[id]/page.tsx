@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { cancelJobOrder, returnFromJobOrder } from "@/app/actions/inventory";
+import { cancelJobOrder, returnFromJobOrder, updateJobOrderPrices } from "@/app/actions/inventory";
 import { ConfirmButton } from "@/components/client-ui";
-import { JobOrderReturnForm } from "@/components/return-forms";
+import { JobOrderPriceForm, JobOrderReturnForm } from "@/components/return-forms";
 import { JoStatusBadge } from "@/components/stock-ui";
 import { PageHeader } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
@@ -38,6 +38,7 @@ export default async function JobOrderPage({ params, searchParams }: { params: P
       />
       {saved === "created" && <p className="ok-box mb-4 max-w-3xl">Materials assigned and job order {jo.joNumber} created. Print it for the team / client to sign.</p>}
       {saved === "added" && <p className="ok-box mb-4 max-w-3xl">Materials added to {jo.joNumber}{jo.client ? `, ${jo.client.name}’s job order` : ""}.</p>}
+      {saved === "prices" && <p className="ok-box mb-4 max-w-3xl">Prices saved for this client. The project cost now uses them.</p>}
       {saved === "returned" && <p className="ok-box mb-4 max-w-3xl">Materials removed from {jo.joNumber} and returned to stock.</p>}
       {saved === "cancelled" && <p className="ok-box mb-4 max-w-3xl">Job order cancelled. Its materials are back in stock.</p>}
       {cancelled && (
@@ -95,6 +96,15 @@ export default async function JobOrderPage({ params, searchParams }: { params: P
             <Link href={`/inventory/job-orders/${id}/add`} className="btn btn-sm">+ Add materials</Link>
           </div>
           <JobOrderReturnForm action={returnFromJobOrder.bind(null, id)} materials={jo.materials} today={todayPH()} />
+        </section>
+      )}
+      {!cancelled && jo.materials.length > 0 && (
+        <section id="prices" className="card mt-6 max-w-3xl scroll-mt-6 overflow-x-auto">
+          <div className="border-b border-slate-200 px-5 py-3">
+            <h2>Prices</h2>
+            <p className="text-sm text-slate-500">This client’s price per unit, kept from when it was assigned. Later changes in Materials don’t affect it.</p>
+          </div>
+          <JobOrderPriceForm action={updateJobOrderPrices.bind(null, id)} materials={jo.materials} />
         </section>
       )}
 

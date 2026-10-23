@@ -78,7 +78,7 @@ export default async function ProjectCostPage({ searchParams }: { searchParams: 
           <section className="card mb-6 overflow-x-auto">
             <div className="border-b border-slate-200 px-4 py-3">
               <h2>Warehouse materials</h2>
-              <p className="text-sm text-slate-500">Assigned through job orders, less returns, at the cost they went out at.</p>
+              <p className="text-sm text-slate-500">Assigned through job orders, less returns, at the client’s prices (edit them on the job order).</p>
             </div>
             {report.warehouse.length === 0 ? (
               <Empty>No warehouse materials assigned{from || to ? " in this period" : ""}.</Empty>
@@ -97,7 +97,7 @@ export default async function ProjectCostPage({ searchParams }: { searchParams: 
                       <td className="num font-medium">{num(r.net)} {r.unit}</td>
                       <td className="num">
                         {peso(r.cost)}
-                        {r.estimated && <span className="ml-1 text-xs text-amber-700" title="No cost was recorded on some movements; the material’s default cost was used.">est.</span>}
+                        {r.unpriced && <span className="ml-1 text-xs text-amber-700" title="Some of it has no price. Set the client’s price on their job order.">no price</span>}
                       </td>
                     </tr>
                   ))}

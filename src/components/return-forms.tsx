@@ -114,3 +114,59 @@ export function ClientReturnButton({
     </div>
   );
 }
+
+export type JoPriceRow = { materialId: number; description: string; spec: string | null; unit: string; out: number; cost: number };
+
+/** Job order page: the client's price per material, editable. Materials' own costs aren't changed. */
+export function JobOrderPriceForm({
+  action,
+  materials,
+}: {
+  action: (prev: FormState, fd: FormData) => Promise<FormState>;
+  materials: JoPriceRow[];
+}) {
+  const [state, onSubmit, pending] = useFormAction<FormState>(action, {});
+  const [prices, setPrices] = useState<Record<number, string>>(() => Object.fromEntries(materials.map((m) => [m.materialId, String(m.cost)])));
+  const price = (m: JoPriceRow) => Number(prices[m.materialId]);
+  const changed = materials.filter((m) => prices[m.materialId] !== "" && price(m) !== m.cost);
+  const invalid = materials.some((m) => prices[m.materialId] === "" || !Number.isFinite(price(m)) || price(m) < 0);
+  const total = materials.reduce((s, m) => s + m.out * (Number.isFinite(price(m)) ? price(m) : 0), 0);
+  const peso = (n: number) => `₱${n.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4 p-5">
+      <input type="hidden" name="prices" value={JSON.stringify(changed.map((m) => ({ materialId: m.materialId, unitCost: price(m) })))} />
+      <table className="table">
+        <thead>
+          <tr><th>Material</th><th className="num">Net qty</th><th className="num w-44">Unit price</th><th className="num">Amount</th></tr>
+        </thead>
+        <tbody>
+          {materials.map((m) => (
+            <tr key={m.materialId}>
+              <td>{m.description}{m.spec && <span className="text-slate-500"> · {m.spec}</span>}</td>
+              <td className="num">{num(m.out)} {m.unit}</td>
+              <td>
+                <div className="flex items-center justify-end gap-1">
+                  <span className="text-slate-500">₱</span>
+                  <input className={`input w-32 text-right ${price(m) !== m.cost ? "border-amber-400 bg-amber-50" : ""}`} type="number" min={0} step="0.01"
+                    inputMode="decimal" value={prices[m.materialId] ?? ""} onChange={(e) => setPrices((p) => ({ ...p, [m.materialId]: e.target.value }))}
+                    aria-label={`Price of ${m.description}`} />
+                </div>
+              </td>
+              <td className="num">{peso(m.out * (Number.isFinite(price(m)) ? price(m) : 0))}</td>
+            </tr>
+          ))}
+          <tr className="font-semibold"><td colSpan={3}>Total (net of returns)</td><td className="num">{peso(total)}</td></tr>
+        </tbody>
+      </table>
+      {invalid && <p className="error-box">Prices must be 0 or more.</p>}
+      {state.error && <p className="error-box">{state.error}</p>}
+      <div className="flex flex-wrap items-center gap-3">
+        <button className="btn btn-primary" disabled={pending || changed.length === 0 || invalid}>
+          {pending ? "Saving…" : `Save prices${changed.length ? ` (${changed.length})` : ""}`}
+        </button>
+        <span className="text-sm text-slate-500">Only this client’s prices change. The material’s cost in Materials stays as it is.</span>
+      </div>
+    </form>
+  );
+}

@@ -3,6 +3,7 @@ import { Empty, PageHeader } from "@/components/ui";
 import { query } from "@/db";
 import { requireUser } from "@/lib/auth";
 import { fmtDate, num } from "@/lib/format";
+import { JO_LINE_JOIN } from "@/lib/job-orders";
 
 export const metadata = { title: "Materials by client" };
 
@@ -35,23 +36,26 @@ export default async function ClientHistoryPage({ searchParams }: { searchParams
     params.push(to);
   }
   if (q) {
-    where.push("(m.name LIKE ? OR m.spec LIKE ?)");
+    where.push("(IF(ji.id IS NULL, m.name, ji.description) LIKE ? OR IF(ji.id IS NULL, m.spec, ji.spec) LIKE ?)");
     params.push(`%${q}%`, `%${q}%`);
   }
-  const FROM = `FROM stock_movements sm JOIN materials m ON m.id = sm.material_id JOIN clients c ON c.id = sm.client_id
+  // Names, specs and units are shown as assigned to the client (the job order line), not as the material reads today.
+  const FROM = `FROM stock_movements sm JOIN materials m ON m.id = sm.material_id JOIN clients c ON c.id = sm.client_id ${JO_LINE_JOIN}
                 LEFT JOIN users u ON u.id = sm.created_by_id LEFT JOIN job_orders jo ON jo.id = sm.job_order_id WHERE ${where.join(" AND ")}`;
 
   const [clients, totals, count, rows] = await Promise.all([
     query<{ id: number; name: string }>("SELECT id, name FROM clients ORDER BY name"),
     query<{ clientId: number; clientName: string; materialId: number; name: string; spec: string | null; unit: string; qty: number; times: number; last: string }>(
-      `SELECT c.id AS clientId, c.name AS clientName, m.id AS materialId, m.name, m.spec, m.unit,
+      `SELECT c.id AS clientId, c.name AS clientName, m.id AS materialId,
+              MIN(IF(ji.id IS NULL, m.name, ji.description)) AS name, MIN(IF(ji.id IS NULL, m.spec, ji.spec)) AS spec, MIN(IF(ji.id IS NULL, m.unit, ji.unit)) AS unit,
               -SUM(sm.quantity) AS qty, SUM(sm.type = 'ISSUE') AS times, MAX(sm.movement_date) AS last
-       ${FROM} GROUP BY c.id, m.id HAVING qty <> 0 ORDER BY c.name, m.name`,
+       ${FROM} GROUP BY c.id, m.id HAVING qty <> 0 ORDER BY c.name, name`,
       params,
     ),
     query<{ n: number }>(`SELECT COUNT(*) AS n ${FROM}`, params),
     query<{ id: number; date: string; clientId: number; clientName: string; materialId: number; name: string; spec: string | null; unit: string; qty: number; type: string; reference: string | null; byName: string | null; jobOrderId: number | null; joNumber: string | null }>(
-      `SELECT sm.id, sm.movement_date AS date, c.id AS clientId, c.name AS clientName, m.id AS materialId, m.name, m.spec, m.unit,
+      `SELECT sm.id, sm.movement_date AS date, c.id AS clientId, c.name AS clientName, m.id AS materialId,
+              IF(ji.id IS NULL, m.name, ji.description) AS name, IF(ji.id IS NULL, m.spec, ji.spec) AS spec, IF(ji.id IS NULL, m.unit, ji.unit) AS unit,
               -sm.quantity AS qty, sm.type, sm.reference, u.name AS byName, sm.job_order_id AS jobOrderId, jo.jo_number AS joNumber
        ${FROM} ORDER BY sm.movement_date DESC, sm.id DESC LIMIT ? OFFSET ?`,
       [...params, PER_PAGE, (page - 1) * PER_PAGE],
